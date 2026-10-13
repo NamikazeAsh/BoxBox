@@ -1,0 +1,47 @@
+# BoxBox pipeline config. Every modelling assumption lives here so it can be varied.
+
+seasons: [2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026]
+# Written to data/processed/holdout/ instead of data/processed/. Do not analyse until the shift study.
+holdout_seasons: [2026]
+
+# Seasons each component trains on (modelling D2). Holdout seasons are rejected here except for shift_study.
+training_seasons:
+  degradation: [2022, 2023, 2024, 2025]       # 18 inch tyres and ground effect cars only
+  overtaking: [2022, 2023, 2024, 2025]        # passing changed with the 2022 cars
+  pit_loss: [2019, 2020, 2021, 2022, 2023, 2024, 2025]
+  safety_car: [2019, 2020, 2021, 2022, 2023, 2024, 2025]
+  outcome: [2019, 2020, 2021, 2022, 2023, 2024, 2025]   # with an era feature
+  shift_rehearsal_train: [2019, 2020, 2021]   # modelling D3: rehearse on the 2022 change
+  shift_rehearsal_test: [2022]
+  shift_study_train: [2022, 2023, 2024, 2025]
+  shift_study_test: [2026]
+
+paths:
+  fastf1_cache: data/raw/fastf1
+  interim: data/interim
+  processed: data/processed
+  reference: data/reference
+
+ingest:
+  # Long run practice session: FP2, or FP1 on sprint weekends
+  sessions: [R, Q, FP]
+  jolpica_url: https://api.jolpi.ca/ergast/f1
+  jolpica_delay_s: 0.5
+  rate_limit_wait_s: 900
+
+clean_lap:
+  traffic_gap_s: 1.0        # laps closer than this to the car ahead count as traffic
+  outlier_pct: 1.07         # laps slower than this times the driver's race median are dropped
+  dry_compounds: [SOFT, MEDIUM, HARD]
+
+fuel:
+  # Assumption, no fuel data exists. Linear burn from start load to zero over the race distance.
+  start_kg: 100.0
+  s_per_kg: 0.03
+
+pit_loss:
+  min_s: 5.0
+  max_s: 60.0
+
+long_run:
+  min_laps: 8

@@ -1,0 +1,10 @@
+base 21212
+gap 0.5 kept 19980 74.9
+gap 1.0 kept 15940 59.7
+gap 1.5 kept 13529 50.7
+gap 2.0 kept 11522 43.2
+{'HARD': 7393, 'MEDIUM': 6617, 'SOFT': 1930}
+per race retention min/max {'Australian Grand Prix': 2.2, 'British Grand Prix': 14.3, 'Dutch Grand Prix': 44.9, 'Belgian Grand Prix': 48.4} {'Mexico City Grand Prix': 73.1, 'Chinese Grand Prix': 73.3, 'Japanese Grand Prix': 76.1}
+longrun>= 5 driver weekends 339 of 477 71.1
+longrun>= 6 driver weekends 292 of 477 61.2
+longrun>= 8 driver weekends 204 of 477 42.8

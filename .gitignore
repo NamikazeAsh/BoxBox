@@ -1,1 +1,17 @@
 *.docx
+
+# MDs
+notes/
+CLAUDE.md
+
+# Pipeline data, rebuilt by scripts/pull_data.py and scripts/build_tables.py
+data/*
+!data/reference/
+
+# 2025 exploration data and FastF1 cache, rebuilt by data-exploration/scripts/pull2025.py
+data-exploration/cache/
+data-exploration/data/
+
+__pycache__/
+*.egg-info/
+.pytest_cache/

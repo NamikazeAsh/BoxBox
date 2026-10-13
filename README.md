@@ -18,14 +18,26 @@ The 2026 season brought new power unit, aerodynamic, and tyre regulations. This 
 * [FastF1](https://github.com/theOehrly/Fast-F1): Python interface to the official F1 live timing archive (2018 onward). Lap and sector times, tyre compound and age, pit timings, track status, and weather.
 * [Jolpica F1 API](https://github.com/jolpica/jolpica-f1): race results, grids, and pit stops.
 
-All race, qualifying, and practice sessions from 2018 to 2026 are extracted with local caching. Cleaned tables (laps, stints, results, circuits, weather) are stored as Parquet.
+Race, qualifying, and the main long run practice session (FP2, or FP1 on sprint weekends) from 2019 to 2026 are extracted with local caching. 2018 is left out because it records seven named compounds (Hypersoft, Ultrasoft, ...) instead of event Soft, Medium, and Hard labels. Cleaned tables (laps, stints, results, circuits, weather) are stored as Parquet.
 
 Derived quantities:
 
 * **Pit loss per circuit:** time difference between pit laps and normal laps.
 * **Long run pace:** from practice stints of 8 or more consecutive laps.
 * **Clean lap filter:** removes in and out laps, safety car laps, and laps in traffic.
-* **Compounds:** modeled by Pirelli designation (C1, C2, ...) rather than event relative Soft, Medium, and Hard labels.
+* **Compounds:** modeled by the event's Soft, Medium, and Hard labels together with circuit and season, rather than Pirelli designations (C1, C2, ...). Pirelli numbers do not describe the same tyre over time: the 13 inch tyres were replaced by an 18 inch family in 2022, the 2022 C1 was renamed C0 in 2023, and C6 was added in 2025 and dropped in 2026. Pirelli's selection per circuit is mostly stable, so the label plus the circuit identifies the tyre in practice. A small reference table of Pirelli designations for 2025 and 2026 flags circuits whose selection changed, for the distribution shift study.
+
+## Running the pipeline
+
+```
+pip install -r requirements.txt
+pip install -e .
+python scripts/pull_data.py        # raw sessions into data/interim, resumable, takes a few hours the first time
+python scripts/build_tables.py     # clean tables into data/processed
+python -m pytest
+```
+
+Thresholds and assumptions (traffic gap, fuel burn, long run length, seasons) live in `config.yaml`. 2026 is written to `data/processed/holdout/` and kept out of analysis until the distribution shift study. Seasons used to train each component are set under `training_seasons`. `data/reference/pirelli_2025_2026.csv` holds the Pirelli designations for 2025 and 2026, filled in by hand.
 
 ## Approach
 
