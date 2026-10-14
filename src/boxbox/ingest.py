@@ -34,7 +34,8 @@ def write_parquet(df, path):
         df.to_parquet(path)
 
 
-def with_retry(fn, cfg, tries=4):
+def with_retry(fn, cfg):
+    tries = cfg['ingest']['rate_limit_tries']
     for i in range(tries):
         try:
             return fn()

@@ -27,7 +27,8 @@ ingest:
   sessions: [R, Q, FP]
   jolpica_url: https://api.jolpi.ca/ergast/f1
   jolpica_delay_s: 0.5
-  rate_limit_wait_s: 900
+  rate_limit_wait_s: 300
+  rate_limit_tries: 14       # 14 x 300 s covers the rolling hour window
 
 clean_lap:
   traffic_gap_s: 1.0        # laps closer than this to the car ahead count as traffic
