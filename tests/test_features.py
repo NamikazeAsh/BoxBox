@@ -83,3 +83,20 @@ def test_pitstop_duration_parses_seconds_and_minutes():
     assert out['PitLane_s'].iloc[0] == pytest.approx(23.456)
     assert out['PitLane_s'].iloc[1] == pytest.approx(62.5)
     assert pd.isna(out['PitLane_s'].iloc[2])
+
+
+def test_wet_race_needs_wet_tyres_not_just_rain():
+    laps = pd.concat([
+        make_laps([('A', 1, 90.0, 90.0, False, False, '1', 'MEDIUM')]).assign(Round=1, Rainfall=True),
+        make_laps([('A', 1, 90.0, 90.0, False, False, '1', 'INTERMEDIATE')]).assign(Round=2, Rainfall=False),
+    ])
+    assert features.wet_races(laps) == {(2025, 2)}
+
+
+def test_circuit_merges_renamed_venues_and_splits_sakhir_outer():
+    ev = pd.DataFrame({'Year': [2019, 2022, 2020, 2020],
+                       'EventName': ['Monaco Grand Prix', 'Monaco Grand Prix', 'Bahrain Grand Prix', 'Sakhir Grand Prix'],
+                       'Location': ['Monte Carlo', 'Monaco', 'Sakhir', 'Sakhir']})
+    cfg = {'circuits': {'aliases': {'Monte Carlo': 'Monaco'},
+                        'layouts': [{'year': 2020, 'event': 'Sakhir Grand Prix', 'circuit': 'Sakhir Outer'}]}}
+    assert features.add_circuit(ev, cfg)['Circuit'].tolist() == ['Monaco', 'Monaco', 'Sakhir', 'Sakhir Outer']

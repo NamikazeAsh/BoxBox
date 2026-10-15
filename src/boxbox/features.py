@@ -16,12 +16,25 @@ def add_gap_ahead(laps):
     return laps.sort_index()
 
 
-def wet_races(laps, weather):
-    """(Year, Round) pairs where rain fell or anyone ran intermediates or wets."""
-    rain = weather.groupby(RACE)['Rainfall'].any()
+def add_circuit(events, cfg):
+    """Circuit is the stable track key. Location alone is not: FastF1 renamed some venues between
+    seasons, and the 2020 Sakhir Grand Prix shares its Location with Bahrain but ran the outer layout."""
+    c = cfg['circuits']
+    events = events.copy()
+    events['Circuit'] = events['Location'].replace(c['aliases'])
+    for o in c['layouts']:
+        events.loc[(events['Year'] == o['year']) & (events['EventName'] == o['event']), 'Circuit'] = o['circuit']
+    return events
+
+
+def wet_races(laps):
+    """(Year, Round) pairs where anyone ran intermediates or wets.
+
+    A rainfall reading alone does not count: it is often recorded before the start or as a few drops
+    that never change tyres (modelling O5). Per lap Rainfall stays on the laps table as a feature.
+    """
     tyres = laps['Compound'].isin(WET).groupby([laps['Year'], laps['Round']]).any()
-    flag = rain.reindex(tyres.index, fill_value=False) | tyres
-    return set(flag[flag].index)
+    return set(tyres[tyres].index)
 
 
 def add_fuel_correction(laps, cfg):

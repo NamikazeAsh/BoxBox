@@ -9,8 +9,8 @@ log = logging.getLogger('boxbox.pipeline')
 
 
 def build(cfg, years):
-    ev = clean.events(cfg, years)
-    ev_cols = ['Year', 'Round', 'EventName', 'Location', 'EventFormat', 'EventDate']
+    ev = features.add_circuit(clean.events(cfg, years), cfg)
+    ev_cols = ['Year', 'Round', 'EventName', 'Location', 'Circuit', 'EventFormat', 'EventDate']
 
     weather = clean.clean_weather(clean.read_table(cfg, years, 'weather', {'R', 'FP1', 'FP2'}))
     race_w = weather[weather['Session'] == 'R']
@@ -21,7 +21,7 @@ def build(cfg, years):
     laps = features.add_gap_ahead(laps)
     laps = features.add_fuel_correction(laps, cfg)
     laps = features.add_clean_flags(laps, cfg)
-    wet = features.wet_races(laps, race_w)
+    wet = features.wet_races(laps)
     laps['WetRace'] = [(y, r) in wet for y, r in zip(laps['Year'], laps['Round'])]
 
     prac = clean.clean_laps(clean.read_table(cfg, years, 'laps', {'FP1', 'FP2'}))
@@ -43,7 +43,7 @@ def build(cfg, years):
         'race_control': clean.clean_rcm(clean.read_table(cfg, years, 'rcm', {'R'})),
         'pitstops': pitstops,
         'pit_loss_stops': stops,
-        'pit_loss': features.pit_loss_summary(stops).merge(ev[['Year', 'Round', 'EventName', 'Location']],
+        'pit_loss': features.pit_loss_summary(stops).merge(ev[['Year', 'Round', 'EventName', 'Location', 'Circuit']],
                                                            on=['Year', 'Round']),
         'long_runs': features.long_runs(prac, cfg),
     }

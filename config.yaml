@@ -30,6 +30,13 @@ ingest:
   rate_limit_wait_s: 300
   rate_limit_tries: 14       # 14 x 300 s covers the rolling hour window
 
+# Circuit key. Aliases merge Location names FastF1 changed between seasons; layouts split events
+# that share a Location but ran a different track.
+circuits:
+  aliases: {Monte Carlo: Monaco, Singapore: Marina Bay, Miami Gardens: Miami}
+  layouts:
+    - {year: 2020, event: Sakhir Grand Prix, circuit: Sakhir Outer}
+
 clean_lap:
   traffic_gap_s: 1.0        # laps closer than this to the car ahead count as traffic
   outlier_pct: 1.07         # laps slower than this times the driver's race median are dropped
