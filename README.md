@@ -18,7 +18,7 @@ The 2026 season brought new power unit, aerodynamic, and tyre regulations. This 
 * [FastF1](https://github.com/theOehrly/Fast-F1): Python interface to the official F1 live timing archive (2018 onward). Lap and sector times, tyre compound and age, pit timings, track status, and weather.
 * [Jolpica F1 API](https://github.com/jolpica/jolpica-f1): race results, grids, and pit stops.
 
-Race, qualifying, and the main long run practice session (FP2, or FP1 on sprint weekends) from 2019 to 2026 are extracted with local caching. 2018 is left out because it records seven named compounds (Hypersoft, Ultrasoft, ...) instead of event Soft, Medium, and Hard labels. Cleaned tables (laps, stints, results, circuits, weather) are stored as Parquet.
+Race, sprint, qualifying, and the main long run practice session (FP2, or FP1 on sprint weekends) from 2019 to 2026 are extracted with local caching. 2018 is left out because it records seven named compounds (Hypersoft, Ultrasoft, ...) instead of event Soft, Medium, and Hard labels. Cleaned tables (laps, stints, results, circuits, weather) are stored as Parquet.
 
 Derived quantities:
 

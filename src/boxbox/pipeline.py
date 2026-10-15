@@ -12,7 +12,7 @@ def build(cfg, years):
     ev = features.add_circuit(clean.events(cfg, years), cfg)
     ev_cols = ['Year', 'Round', 'EventName', 'Location', 'Circuit', 'EventFormat', 'EventDate']
 
-    weather = clean.clean_weather(clean.read_table(cfg, years, 'weather', {'R', 'FP1', 'FP2'}))
+    weather = clean.clean_weather(clean.read_table(cfg, years, 'weather', {'R', 'S', 'FP1', 'FP2'}))
     race_w = weather[weather['Session'] == 'R']
 
     laps = clean.clean_laps(clean.read_table(cfg, years, 'laps', {'R'}))
@@ -25,10 +25,20 @@ def build(cfg, years):
     laps['WetRace'] = [(y, r) in wet for y, r in zip(laps['Year'], laps['Round'])]
 
     prac = clean.clean_laps(clean.read_table(cfg, years, 'laps', {'FP1', 'FP2'}))
-    prac = clean.join_weather(prac, weather[weather['Session'] != 'R'])
+    prac = clean.join_weather(prac, weather[weather['Session'].isin(['FP1', 'FP2'])])
     prac = prac.merge(ev[ev_cols], on=['Year', 'Round'], how='left')
 
-    results = clean.clean_results(clean.read_table(cfg, years, 'results', {'R', 'Q'}))
+    # Sprints: same treatment as race laps, own fuel load, own wet flag
+    sprint = clean.clean_laps(clean.read_table(cfg, years, 'laps', {'S'}))
+    sprint = clean.join_weather(sprint, weather[weather['Session'] == 'S'])
+    sprint = sprint.merge(ev[ev_cols], on=['Year', 'Round'], how='left')
+    sprint = features.add_gap_ahead(sprint)
+    sprint = features.add_fuel_correction(sprint, cfg, features.sprint_start_fuel(sprint, laps, cfg))
+    sprint = features.add_clean_flags(sprint, cfg)
+    sprint_wet = features.wet_races(sprint)
+    sprint['WetRace'] = [(y, r) in sprint_wet for y, r in zip(sprint['Year'], sprint['Round'])]
+
+    results = clean.clean_results(clean.read_table(cfg, years, 'results', {'R', 'S', 'Q'}))
     pitstops = clean.clean_pitstops(clean.read_table(cfg, years, 'pitstops', {'R'}))
     stops = features.pit_loss(laps, wet, cfg)
 
@@ -38,6 +48,9 @@ def build(cfg, years):
         'practice_laps': prac,
         'stints': features.stints(laps),
         'results': results[results['Session'] == 'R'].drop(columns=['Q1_s', 'Q2_s', 'Q3_s']),
+        'sprint_laps': sprint,
+        'sprint_stints': features.stints(sprint),
+        'sprint_results': results[results['Session'] == 'S'].drop(columns=['Q1_s', 'Q2_s', 'Q3_s']),
         'qualifying': results[results['Session'] == 'Q'].drop(columns=['GridPosition', 'Points', 'Laps']),
         'weather': weather,
         'race_control': clean.clean_rcm(clean.read_table(cfg, years, 'rcm', {'R'})),

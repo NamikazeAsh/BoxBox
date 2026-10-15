@@ -23,8 +23,8 @@ paths:
   reference: data/reference
 
 ingest:
-  # Long run practice session: FP2, or FP1 on sprint weekends
-  sessions: [R, Q, FP]
+  # Long run practice session: FP2, or FP1 on sprint weekends. S is pulled only where the weekend has one.
+  sessions: [R, Q, FP, S]   # S = sprint race (added 2026-10-14)
   jolpica_url: https://api.jolpi.ca/ergast/f1
   jolpica_delay_s: 0.5
   rate_limit_wait_s: 300

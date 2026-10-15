@@ -100,3 +100,12 @@ def test_circuit_merges_renamed_venues_and_splits_sakhir_outer():
     cfg = {'circuits': {'aliases': {'Monte Carlo': 'Monaco'},
                         'layouts': [{'year': 2020, 'event': 'Sakhir Grand Prix', 'circuit': 'Sakhir Outer'}]}}
     assert features.add_circuit(ev, cfg)['Circuit'].tolist() == ['Monaco', 'Monaco', 'Sakhir', 'Sakhir Outer']
+
+
+def test_sprint_fuel_scales_with_distance():
+    race = make_laps([('A', n, 0.0, 90.0, False, False, '1', 'MEDIUM') for n in range(1, 61)])
+    sprint = make_laps([('A', n, 0.0, 90.0, False, False, '1', 'MEDIUM') for n in range(1, 21)])
+    start = features.sprint_start_fuel(sprint, race, CFG)
+    assert start.iloc[0] == pytest.approx(100.0 / 3)
+    out = features.add_fuel_correction(sprint.copy(), CFG, start)
+    assert out['FuelKg'].iloc[0] == pytest.approx(100.0 / 3)

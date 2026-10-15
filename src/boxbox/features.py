@@ -37,18 +37,28 @@ def wet_races(laps):
     return set(tyres[tyres].index)
 
 
-def add_fuel_correction(laps, cfg):
+def add_fuel_correction(laps, cfg, start_kg=None):
     """LapTimeFC_s is lap time with the estimated fuel mass effect removed (as if on empty tanks).
 
-    Assumes linear burn from the configured start load to zero over the race distance, taken as
-    the most laps completed by anyone. Shortened races are therefore treated as full distance.
+    Assumes linear burn from the start load to zero over the race distance, taken as the most laps
+    completed by anyone. Shortened races are therefore treated as full distance. start_kg defaults to the
+    configured race load; pass a per lap Series for sprints (see sprint_start_fuel).
     """
     f = cfg['fuel']
+    start = f['start_kg'] if start_kg is None else start_kg
     total = laps.groupby(RACE)['LapNumber'].transform('max')
-    fuel_kg = f['start_kg'] * (1 - (laps['LapNumber'] - 1) / total)
+    fuel_kg = start * (1 - (laps['LapNumber'] - 1) / total)
     laps['FuelKg'] = fuel_kg.clip(lower=0)
     laps['LapTimeFC_s'] = laps['LapTime_s'] - f['s_per_kg'] * laps['FuelKg']
     return laps
+
+
+def sprint_start_fuel(sprint, race, cfg):
+    """Sprint start load per lap: the race load scaled by sprint distance over race distance at the same
+    event (assumes teams fuel for the distance). Falls back to a third of the race load."""
+    ratio = sprint.groupby(RACE)['LapNumber'].max() / race.groupby(RACE)['LapNumber'].max()
+    r = sprint.join(ratio.rename('r'), on=RACE)['r'].fillna(1 / 3)
+    return cfg['fuel']['start_kg'] * r
 
 
 def add_clean_flags(laps, cfg):

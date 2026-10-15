@@ -51,7 +51,7 @@ def pull_session(cfg, year, event, name):
     out = session_dir(cfg, year, rnd, name)
     if (out / '_done').exists():
         return 'cached'
-    is_race = name == 'R'
+    is_race = name in ('R', 'S')   # sprints race too: messages, results, weather
 
     def load():
         s = fastf1.get_session(year, rnd, name)
@@ -63,13 +63,14 @@ def pull_session(cfg, year, event, name):
         raise ValueError('no laps returned')
     out.mkdir(parents=True, exist_ok=True)
     write_parquet(s.laps.drop(columns=['LapStartDate'], errors='ignore'), out / 'laps.parquet')
-    if name in ('R', 'Q'):
+    if name in ('R', 'S', 'Q'):
         write_parquet(s.results, out / 'results.parquet')
     if name != 'Q':
         write_parquet(s.weather_data, out / 'weather.parquet')
     if is_race:
         write_parquet(s.race_control_messages, out / 'rcm.parquet')
-        write_parquet(pull_jolpica_pitstops(cfg, year, rnd), out / 'pitstops.parquet')
+        if name == 'R':
+            write_parquet(pull_jolpica_pitstops(cfg, year, rnd), out / 'pitstops.parquet')
     (out / '_done').touch()
     return 'pulled'
 
