@@ -21,6 +21,7 @@ paths:
   interim: data/interim
   processed: data/processed
   reference: data/reference
+  models: data/models
 
 ingest:
   # Long run practice session: FP2, or FP1 on sprint weekends. S is pulled only where the weekend has one.
@@ -37,6 +38,11 @@ circuits:
   layouts:
     - {year: 2020, event: Sakhir Grand Prix, circuit: Sakhir Outer}
 
+# Team key for form across seasons: renamed teams map to their current name
+teams:
+  lineage: {Toro Rosso: Racing Bulls, AlphaTauri: Racing Bulls, RB: Racing Bulls, Racing Point: Aston Martin,
+            Renault: Alpine, Alfa Romeo Racing: Sauber, Alfa Romeo: Sauber, Kick Sauber: Sauber}
+
 clean_lap:
   traffic_gap_s: 1.0        # laps closer than this to the car ahead count as traffic
   outlier_pct: 1.07         # laps slower than this times the driver's race median are dropped
@@ -52,4 +58,72 @@ pit_loss:
   max_s: 60.0
 
 long_run:
-  min_laps: 8
+  min_laps: 5    # representative laps in one practice stint; 5 beat 8 for the degradation update (modelling O4)
+
+degradation:
+  min_fit_laps: 3          # clean laps a stint needs to inform a slope
+  anchor_laps: 3           # evaluation: clean laps at the start of a stint that set its pace level
+  min_eval_laps: 3         # evaluation: clean laps after the anchor for a stint to be scored
+  shrink_grid: [0, 5, 10, 20, 50, 100]   # weight of the compound slope, in stints; tuned on validation
+  age_terms: [linear]   # sqrt and log tested 2026-10-14 (experiments.md): no gain on validation, worse on test
+  decay_grid: [1.0]   # recency weights 0.7, 0.5, 0.3 tested 2026-10-14: at most 0.002 s better, not worth it
+  stint_length_options: [false, true]     # slope varies with planned stint length (mostly tyre management, experiments.md)
+  stint_length_ref: 20                    # stint length, in laps, at which the circuit slope applies
+  lap_terms_options: [false, true]        # dirty air and race start offsets, fitted with the slopes
+  dirty_air_bins: [1.0, 1.5, 2.0, 2.5, 3.0]   # gap to the car ahead, s; beyond the last edge is clean air
+  race_start_laps: 3                      # one offset per race lap 2 to this lap
+  train_clean:   # fitting only; scored laps unchanged. Off: 0.0007 s on validation (experiments.md 2026-10-18)
+    drop_deleted: false                   # laps deleted for track limits
+    backmarker_gap_s: null                # laps within this of a car a lap or more down (tested 2.0)
+  season_adjust:   # fix 1, scale wear by this season's earlier races; no gain on 2023 and 2024 (experiments.md), kept for the 2026 shift study
+    scopes: [global, compound]            # one multiplier for all compounds, or one per compound
+    shrink_grid: [0, 25, 50, 100, 200, 400]   # weight of "no change" (multiplier 1), in stints
+  sprint_adjust:   # adjust race wear by how that weekend's sprint wore against the model
+    modes: [scale, shift]                 # scale: multiply wear; shift: add seconds per lap to the slope
+    scopes: [global, compound]
+    shrink_grid: [0, 5, 10, 20, 50, 100]      # weight of "no change", in stints (about 15 to 20 per sprint)
+  weekend_adjust:   # one slope shift for all compounds from the same weekend (modelling O1)
+    sprint_shrink: 10                     # chosen in sprint_adjust (shift, global)
+    practice_min_laps_grid: [5, 8]        # compared in tune_weekend_adjust; the model uses long_run.min_laps
+    practice_shrink_grid: [0, 20, 50, 100, 200, 400]   # weight of "no change", in runs (about 20 per weekend at 5 laps)
+    practice_max_history: 0               # practice fallback: only circuits with at most this many training stints
+    practice_shrink: 100                  # chosen 2026-10-15, whichever validation season picks it (experiments.md)
+  lgbm:   # comparison only (scripts/compare_degradation.py); variants use the first leaves and trees values
+    num_leaves: [8, 16]
+    n_estimators: [300, 800]
+    min_child_samples: 200
+    learning_rate: 0.03
+  anchor_level: median    # mean or median of the anchor laps' level; median 2026-10-18 (experiments.md), mean before
+  ensembles:   # equal weight averages of comparison models by name (degradation/ensemble.py); members [] switches one off
+    simulator average: {kind: wear, members: [quadratic, bayes]}                                  # a wear curve: usable pre race
+    live average: {kind: forecast, members: [quadratic, bayes, 'lgbm, leaves 8, trees 300']}      # needs an anchor: live only
+  intervals:   # every model is also scored on its quantiles (coverage, width, quantile score)
+    levels: [0.1, 0.25, 0.5, 0.75, 0.9]
+    conformal_folds: 5                    # out of fold errors from folds of whole training races
+    conformal_models: [linear, quadratic, 'gam, lam 1000', 'lgbm, leaves 8, trees 300', bayes, simulator average, live average]
+  gam:   # smooth curve in tyre age per compound on top of the linear rates (degradation/gam.py)
+    lam_grid: [100, 1000, 10000]          # roughness penalty, tuned on validation
+    knot_step: 5
+    max_age: 50
+  bayes:   # hierarchical model (degradation/bayes.py), NUTS on CPU
+    warmup: 500
+    samples: 500
+    chains: 2
+  live_adjust:   # live model only: slope shift from laps the field has run in the same race so far (modelling O9)
+    shrink_grid: [10, 20, 40, 80, 160, 320]   # weight of the prior (none, or the weekend shift), in stints
+
+outcome:   # finishing position predictor, classified finishers only (modelling D6, O6)
+  exclude_races: [[2021, 12]]      # Belgium 2021: three laps behind the safety car, no racing (data_issues.md)
+  quali_gap_clip_pct: 5.0          # cap the qualifying gap (wet sessions, a lap time deleted)
+  sprint_grid_until: 2022          # the sprint set the race grid in 2021 and 2022
+  quali_gap_teammate_fill: true    # no qualifying time: use the teammate's gap before falling back to the cap
+  form_races: 5                    # form is the mean over the previous 5 races the driver (or team) started
+  circuit_shrink_races: 3          # circuit grid hold pulled toward the all circuit mean with weight 3 races
+  ridge_alpha_grid: [1, 10, 100, 1000]
+  blend_ridge_alphas: []           # tested [1000]: best blend 2.181 vs ridge 2.187 of 8 tried, noise (experiments.md 2026-10-18)
+  lgbm:   # small trees, few rows (about 2,600 classified finishes over 2019 to 2025)
+    objectives: [regression, lambdarank]
+    num_leaves: [4, 8]
+    n_estimators: [200, 500]
+    min_child_samples: [20, 50]
+    learning_rate: 0.03

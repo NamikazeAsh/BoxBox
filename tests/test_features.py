@@ -65,15 +65,28 @@ def test_pit_loss_uses_in_and_out_lap_against_clean_median():
     assert features.pit_loss(laps, wet={(2025, 1)}, cfg=CFG).empty
 
 
-def test_long_runs_need_consecutive_representative_laps():
-    rows = [('A', n, 0, 90.0 + 0.1 * n, False, False, '1', 'MEDIUM') for n in range(1, 5)]
-    rows += [('A', 5, 0, 150.0, False, False, '1', 'MEDIUM')]  # slow lap breaks the run
-    rows += [('A', n, 0, 90.0, False, False, '1', 'MEDIUM') for n in range(6, 8)]
+def practice(rows, stint):
     prac = make_laps(rows)
-    prac['Session'], prac['Stint'], prac['Team'], prac['TyreLife'], prac['TrackTemp'] = 'FP2', 1, 'X', 1, 40
-    runs = features.long_runs(prac, CFG)
-    assert runs['Laps'].tolist() == [4]
+    prac['Session'], prac['Stint'], prac['Team'], prac['TyreLife'], prac['TrackTemp'] = 'FP2', stint, 'X', 1, 40
+    return prac
+
+
+def test_long_run_drops_a_slow_lap_instead_of_ending_the_run():
+    rows = [('A', n, 0, 90.0 + 0.1 * n, False, False, '1', 'MEDIUM') for n in range(1, 8)]
+    rows[4] = ('A', 5, 0, 150.0, False, False, '1', 'MEDIUM')   # traffic
+    short = [('A', 8, 0, 95.0, False, True, '1', 'SOFT'), ('A', 9, 0, 89.0, False, False, '1', 'SOFT'),
+             ('A', 10, 0, 99.0, True, False, '1', 'SOFT')]      # a new stint with one timed lap
+    runs = features.long_runs(pd.concat([practice(rows, 1), practice(short, 2)]), CFG)
+    assert runs['Laps'].tolist() == [6]
     assert runs['Slope_s_per_lap'].iloc[0] == pytest.approx(0.1)
+
+
+def test_practice_fuel_correction_uses_the_race_burn_rate():
+    race = make_laps([('A', n, 0.0, 90.0, False, False, '1', 'MEDIUM') for n in range(1, 51)])
+    prac = practice([('A', n, 0, 90.0, False, False, '1', 'MEDIUM') for n in range(11, 16)], 1)
+    runs = features.add_practice_fuel_correction(features.practice_runs(prac, CFG), race, CFG)
+    # 2 kg per lap at 0.03 s per kg: flat raw times are 0.06 s per lap slower once fuel is held fixed
+    assert runs['LapTimeFC_s'].tolist() == pytest.approx([90.0, 90.06, 90.12, 90.18, 90.24])
 
 
 def test_pitstop_duration_parses_seconds_and_minutes():
