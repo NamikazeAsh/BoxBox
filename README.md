@@ -23,6 +23,22 @@ Trained on earlier seasons, tested on 2025:
 * **Finishing position:** 2.35 places average error, against 2.46 for grid order.
 * **Key finding:** how fast tyres wear changes from race to race in ways nothing before the race predicts.
 
+## Dashboard
+
+A local Streamlit app (`streamlit run app/main.py`) with dark and light themes.
+
+![Paddock: headline numbers and the predicted top ten for the last 2025 race](docs/images/paddock.png)
+
+<p>
+  <img src="docs/images/tyre_lab.png" width="49%" alt="Tyre Lab: wear curve for a circuit, compound and stint length">
+  <img src="docs/images/race_predictor.png" width="49%" alt="Race Predictor: predicted against actual finishing order">
+</p>
+
+* **Paddock:** headline results, the predicted top ten for a race, safety car rates and pit loss by circuit.
+* **Tyre Lab:** wear curve for any circuit, compound and stint length, with its uncertainty band and how each model scored.
+* **Race Predictor:** predicted, actual and grid order for every 2025 race, with each driver's tyre strategy.
+* **Methods:** the splits, metrics and baselines behind every number.
+
 ## Data
 
 * [FastF1](https://github.com/theOehrly/Fast-F1): Python interface to the official F1 live timing archive. Lap and sector times, tyre compound and age, pit timings, track status, race control messages, and weather.
@@ -88,8 +104,10 @@ Every threshold, assumption and model option lives in `config.yaml`: seasons per
 
 * `src/boxbox/`: `ingest.py` (pulls), `clean.py` (typed tables), `features.py` (all derived definitions), `pipeline.py`, `checks.py`, `evaluate.py` (season splits), `outcome.py` (finishing position predictor).
 * `src/boxbox/degradation/`: one module per model family on a shared task: `task` (clean laps and the anchored forecast), `linear`, `gam` (quadratic and spline curves), `trees` (LightGBM), `bayes`, `ensemble` (averages), `intervals` (conformal), `adjust` (same weekend and in race updates), `compare`.
+* `app/`: the Streamlit dashboard (pages in `views/`, shared pieces in `components/`, styling in `theme/`); its tables come from `src/boxbox/dashboard.py`.
 * `scripts/`: entry points only.
 * `tests/`: pytest on small synthetic data.
+* `docs/images/`: dashboard screenshots for this README.
 * `data/reference/`: hand filled reference tables (the only data in the repository).
 
 ## Limitations
