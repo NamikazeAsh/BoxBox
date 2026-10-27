@@ -155,6 +155,13 @@ def race_overtakes(laps):
     return l.groupby(RACE)['Gain'].mean().rename('Overtakes')
 
 
+def safety_car_races(laps):
+    """Per race: whether a safety car (track status 4) or a virtual safety car (6 or 7) ran on any lap. A lap's
+    status string lists every status it saw, so '41' counts as a safety car lap."""
+    s = laps.groupby(RACE)['TrackStatus'].agg(lambda x: ''.join(x.dropna().astype(str)))
+    return pd.DataFrame({'SafetyCar': s.str.contains('4'), 'VSC': s.str.contains('[67]')}).reset_index()
+
+
 def team_lineage(team, cfg):
     """Team key that survives renames (Toro Rosso to Racing Bulls and so on), so form carries across seasons."""
     return team.replace(cfg['teams']['lineage'])

@@ -75,6 +75,13 @@ python scripts/train_degradation.py [--validation]   # choose and fit the degrad
 python scripts/train_outcome.py [--validation]       # finishing position predictor
 ```
 
+Dashboard (after the models are trained):
+
+```
+python scripts/pull_data.py --track-maps   # optional: circuit outlines, about a minute
+streamlit run app/main.py
+```
+
 Every threshold, assumption and model option lives in `config.yaml`: seasons per component, the clean lap filter, fuel burn, and switches for each degradation component (dirty air and race start terms, anchor level, which models are averaged, which get intervals), so each choice can be varied and reported.
 
 ## Repository layout

@@ -1,0 +1,169 @@
+/* BoxBox house style on top of the Streamlit theme (.streamlit/config.toml).
+   Colours that must work in both themes derive from currentColor; red and tyre colours are fixed. */
+:root {
+  --bb-red: #E10600;
+  --bb-purple: #B98CFF; --bb-green: #4FD18B; --bb-yellow: #E8B800;
+  --bb-display: "Exo 2", "Arial Narrow", Arial, sans-serif;
+}
+
+/* Red strip across the top, in place of Streamlit's decoration line */
+[data-testid="stDecoration"] { background: var(--bb-red) !important; height: 3px !important; }
+[data-testid="stHeader"] { background: transparent; }
+
+/* Speed lines in the top right corner of the main area */
+[data-testid="stMain"] { position: relative; }
+[data-testid="stMain"]::before {
+  content: ""; position: absolute; top: 0; right: 0; width: min(1170px, 100%); height: 100px; pointer-events: none; z-index: 0;
+  background: repeating-linear-gradient(115deg, color-mix(in srgb, var(--bb-red) 39%, transparent) 0 2px, transparent 2px 13px);
+  -webkit-mask-image: linear-gradient(to left, #000 10%, transparent); mask-image: linear-gradient(to left, #000 10%, transparent);
+}
+[data-testid="stMainBlockContainer"] { max-width: 1240px; padding-top: 3.2rem; position: relative; z-index: 1; }
+
+/* Shared helpers */
+.bb-muted { opacity: .62; }
+.bb-faint { opacity: .42; }
+.bb-num { font-variant-numeric: tabular-nums; }
+
+/* Page header */
+.bb-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 12px 24px; margin-bottom: 8px; }
+.bb-kicker { font-size: 14px; font-weight: 600; color: var(--bb-red); }
+.bb-title { margin: 2px 0 0; padding: 0; font-family: var(--bb-display); font-weight: 800; font-style: italic; text-transform: uppercase;
+  font-size: clamp(34px, 4.4vw, 50px); line-height: 1.05; letter-spacing: -.01em; }
+.bb-title::after { content: ""; display: block; width: 64px; height: 5px; margin-top: 12px; background: var(--bb-red); transform: skewX(-24deg); transform-origin: left; }
+.bb-meta { font-size: 13px; opacity: .5; padding-bottom: 20px; }
+
+/* Section heading with a slanted red tick */
+.bb-section { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; margin: 22px 0 6px; }
+.bb-section::before { content: ""; width: 8px; height: 15px; background: var(--bb-red); transform: skewX(-20deg); flex: none; }
+.bb-section h3 { margin: 0; padding: 0; font-family: var(--bb-display); font-weight: 600; font-size: 19px; }
+.bb-section span { font-size: 13px; opacity: .45; }
+
+/* Stats: no boxes, hairline dividers */
+.bb-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); margin: 18px 0 8px; }
+.bb-stat { padding: 0 28px; border-left: 1px solid color-mix(in srgb, currentColor 14%, transparent); min-width: 0; }
+.bb-stat:first-child { padding-left: 0; border-left: 0; }
+.bb-stat .v { font-family: var(--bb-display); font-weight: 600; font-size: 44px; line-height: 1; font-variant-numeric: tabular-nums; }
+.bb-stat .v small { font-size: 18px; opacity: .6; font-weight: 500; margin-left: 2px; }
+.bb-stat .v.key { color: var(--bb-red); }
+.bb-stat .l { margin-top: 10px; font-size: 14px; opacity: .62; max-width: 32ch; line-height: 1.4; }
+
+/* Timing tower */
+.bb-tower { display: flex; flex-direction: column; }
+.bb-trow { display: grid; grid-template-columns: 28px 3px minmax(0, 1fr) auto 44px; gap: 12px; align-items: center; padding: 8px 0;
+  border-bottom: 1px solid color-mix(in srgb, currentColor 12%, transparent); font-size: 15px; }
+.bb-trow:first-child { border-top: 1px solid color-mix(in srgb, currentColor 12%, transparent); }
+.bb-trow .p { font-family: var(--bb-display); font-weight: 600; opacity: .6; font-variant-numeric: tabular-nums; }
+.bb-trow:first-child .p { color: var(--bb-red); opacity: 1; }
+.bb-trow .stripe { height: 18px; border-radius: 2px; }
+.bb-trow .who { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bb-trow .who span { font-weight: 400; opacity: .45; margin-left: 8px; font-size: 13px; }
+.bb-trow .g { font-size: 13px; opacity: .5; font-variant-numeric: tabular-nums; }
+.bb-trow .d { font-size: 13px; text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+/* Mixed with the text colour: darker on the light theme for contrast, close to the pure colour on dark */
+.bb-up, .bb-green { color: color-mix(in srgb, var(--bb-green) 72%, currentColor); }
+.bb-down { color: color-mix(in srgb, #FF6B6B 75%, currentColor); } .bb-eq { opacity: .4; }
+.bb-purple { color: color-mix(in srgb, var(--bb-purple) 75%, currentColor); }
+.bb-yellow { color: color-mix(in srgb, var(--bb-yellow) 70%, currentColor); }
+
+/* Radio card: the one boxed element */
+.bb-radio { display: flex; gap: 16px; align-items: flex-start; border: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+  border-left: 3px solid var(--bb-red); border-radius: 12px; padding: 18px 22px; background: color-mix(in srgb, currentColor 3%, transparent); margin: 10px 0; }
+.bb-radio .ic { flex: none; width: 36px; height: 36px; border-radius: 50%; background: var(--bb-red); display: flex; align-items: center; justify-content: center; gap: 2px; }
+.bb-radio .ic i { display: block; width: 2px; border-radius: 1px; background: #fff; }
+.bb-radio .ic i:nth-child(1), .bb-radio .ic i:nth-child(5) { height: 4px; }
+.bb-radio .ic i:nth-child(2), .bb-radio .ic i:nth-child(4) { height: 10px; }
+.bb-radio .ic i:nth-child(3) { height: 16px; }
+.bb-radio .who { font-size: 12px; color: var(--bb-red); font-weight: 600; }
+.bb-radio .msg { font-family: var(--bb-display); font-weight: 500; font-size: 19px; line-height: 1.35; margin-top: 2px; max-width: 64ch; }
+
+/* Placeholder card for a page being built */
+.bb-soon { border: 1px dashed color-mix(in srgb, currentColor 25%, transparent); border-radius: 12px; padding: 26px 28px; margin-top: 18px; max-width: 760px; }
+.bb-soon h4 { margin: 0 0 6px; padding: 0; font-family: var(--bb-display); font-weight: 600; font-size: 20px; }
+.bb-soon p { margin: 0 0 12px; opacity: .7; }
+.bb-soon ul { margin: 0; padding-left: 18px; opacity: .7; }
+
+/* Tyre dot and stint bars */
+.bb-tyre { display: inline-block; width: 14px; height: 14px; border-radius: 50%; border: 3px solid var(--c); vertical-align: -2px; }
+.bb-stints { display: flex; flex-direction: column; gap: 6px; }
+.bb-srow { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 10px; align-items: center; font-size: 13px; font-weight: 600; }
+.bb-sbar { display: flex; gap: 2px; height: 14px; }
+.bb-sbar i { display: block; height: 100%; border-radius: 2px; }
+.bb-skey { display: flex; gap: 16px; font-size: 12px; opacity: .6; margin-top: 10px; flex-wrap: wrap; }
+
+/* Circuit map */
+.bb-map { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.bb-map img { display: block; width: 100%; max-width: 170px; max-height: 120px; object-fit: contain; object-position: right; }
+.bb-map-label { font-size: 12px; opacity: .45; }
+
+/* Score table */
+.bb-table-wrap { overflow-x: auto; }
+table.bb-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.bb-table th { text-align: right; font-weight: 500; font-size: 13px; opacity: .5; padding: 8px 12px; border-bottom: 1px solid color-mix(in srgb, currentColor 14%, transparent); white-space: nowrap; }
+.bb-table td { text-align: right; padding: 10px 12px; border-bottom: 1px solid color-mix(in srgb, currentColor 10%, transparent); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.bb-table th:first-child, .bb-table td:first-child { text-align: left; padding-left: 0; }
+.bb-table td .tag { font-size: 12px; opacity: .45; margin-left: 8px; }
+.bb-table td.best { color: color-mix(in srgb, var(--bb-purple) 75%, currentColor); font-weight: 700; }
+.bb-table tr.base td { opacity: .55; }
+.bb-note { font-size: 13px; opacity: .5; margin-top: 10px; }
+
+/* Bars (dirty air and similar) */
+.bb-bars { display: flex; flex-direction: column; gap: 12px; max-width: 620px; }
+.bb-bar { display: grid; grid-template-columns: 120px minmax(0, 1fr) 64px; gap: 14px; align-items: center; font-size: 14px; }
+.bb-bar .l { opacity: .65; }
+.bb-bar .t { height: 6px; background: color-mix(in srgb, currentColor 12%, transparent); border-radius: 3px; overflow: hidden; }
+.bb-bar .t i { display: block; height: 100%; background: currentColor; opacity: .75; border-radius: 3px; }
+.bb-bar .n { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* Definition list for methods */
+dl.bb-dl { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 12px 24px; margin: 8px 0; font-size: 15px; max-width: 860px; }
+dl.bb-dl dt { opacity: .5; }
+dl.bb-dl dd { margin: 0; }
+
+/* Sidebar: wordmark and custom navigation */
+/* Wordmark and tagline scale with the sidebar so they span about 85% (wordmark) and 70% (tagline) of it */
+[data-testid="stSidebarUserContent"] { container-type: inline-size; }
+.bb-wordmark { font-family: var(--bb-display); font-weight: 800; font-style: italic; font-size: clamp(30px, 21.25cqi, 76px); letter-spacing: .01em; line-height: 1; margin: 4px 0 6px; }
+.bb-wordmark span { color: var(--bb-red); }
+.bb-tagline { font-size: clamp(10px, 4.05cqi, 15px); font-weight: 600; letter-spacing: .38em; text-transform: uppercase; opacity: .5; margin-bottom: 14px; }
+.bb-navsec { font-size: 12px; opacity: .42; margin: 14px 0 0 2px; }
+[class*="st-key-nav-"] a, [class*="st-key-nav-"] a * { border-radius: 8px; background: transparent !important; color: inherit !important; }
+[class*="st-key-nav-"] a span { opacity: .75; }
+.st-key-nav-current a { background: color-mix(in srgb, currentColor 7%, transparent) !important; box-shadow: inset 3px 0 0 var(--bb-red); }
+.st-key-nav-current a span { opacity: 1; }
+[class*="st-key-nav-soon"] a span { opacity: .4; }
+[class*="st-key-nav-"] [data-testid="stVerticalBlock"] { gap: 0; }
+.bb-foot { font-size: 12px; opacity: .4; margin-top: 18px; line-height: 1.5; }
+
+/* Compound picker: tyre colour dot on each option of a segmented control with key "compound" */
+.st-key-compound button::before { content: ""; width: 12px; height: 12px; border-radius: 50%; border: 3px solid #9A9CA5; margin-right: 8px; flex: none; }
+.st-key-compound button:nth-of-type(1)::before { border-color: #FF3B3B; }
+.st-key-compound button:nth-of-type(2)::before { border-color: #FFD12E; }
+.st-key-compound button:nth-of-type(3)::before { border-color: #C9CAD0; }
+
+/* Start lights in place of the spinner and the running icon: five lights come on one by one, then go out */
+[data-testid="stSpinnerIcon"], [data-testid="stStatusWidgetRunningIcon"] {
+  position: relative; display: inline-block; width: 55px !important; height: 10px !important; border: 0 !important; border-radius: 0 !important;
+  animation: none !important; flex: none;
+  background: radial-gradient(circle, color-mix(in srgb, currentColor 22%, transparent) 3.5px, transparent 4.5px) 0 0 / 11px 10px repeat-x !important;
+}
+[data-testid="stStatusWidgetRunningIcon"] svg { display: none; }
+[data-testid="stSpinner"] span:has(> [data-testid="stSpinnerIcon"]) { width: auto !important; height: auto !important; margin-right: 2px; display: inline-flex; align-items: center; }
+[data-testid="stSpinnerIcon"]::after, [data-testid="stStatusWidgetRunningIcon"]::after {
+  content: ""; position: absolute; inset: 0 auto 0 0; width: 0;
+  background: radial-gradient(circle, var(--bb-red) 3.5px, transparent 4.5px) 0 0 / 11px 10px repeat-x;
+  animation: bb-lights 2.4s infinite;
+}
+@keyframes bb-lights { 0% { width: 0; animation-timing-function: steps(5, start); } 70%, 100% { width: 55px; } }
+@media (prefers-reduced-motion: reduce) { [data-testid="stSpinnerIcon"]::after, [data-testid="stStatusWidgetRunningIcon"]::after { animation: none; width: 55px; } }
+
+/* Tabs: a little more air */
+[data-baseweb="tab-list"] { gap: 24px; }
+
+@media (max-width: 720px) {
+  [data-testid="stMain"]::before { width: 100%; height: 104px; }
+  .bb-stat, .bb-stat:first-child { padding: 0; border-left: 0; margin-bottom: 20px; }
+  dl.bb-dl { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  dl.bb-dl dd { margin-bottom: 10px; }
+  .bb-map { align-items: center; flex-direction: row; gap: 12px; }
+  .bb-map img { max-width: 96px; max-height: 64px; object-position: left; }
+}

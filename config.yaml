@@ -30,6 +30,7 @@ ingest:
   jolpica_delay_s: 0.5
   rate_limit_wait_s: 300
   rate_limit_tries: 14       # 14 x 300 s covers the rolling hour window
+  track_map_session: R       # session whose circuit key looks up the outline (pull_data.py --track-maps)
 
 # Circuit key. Aliases merge Location names FastF1 changed between seasons; layouts split events
 # that share a Location but ran a different track.
@@ -127,3 +128,18 @@ outcome:   # finishing position predictor, classified finishers only (modelling 
     n_estimators: [200, 500]
     min_child_samples: [20, 50]
     learning_rate: 0.03
+
+dashboard:   # Streamlit app (app/main.py); presentation choices only, no model settings
+  show_holdout: false              # the app refuses to read data/processed/holdout/ until the shift study
+  interval_level: 0.8              # wear curve band: share of laps expected inside it (from the fit's lap noise)
+  stint_laps_default: 20           # stint length the Tyre Lab opens on (the degradation stint_length_ref)
+  pages:   # true shows the page; switch a page on once its view is built (a "soon" page shows a placeholder card)
+    paddock: true
+    tyre_lab: true
+    race_predictor: true
+    strategy_room: false
+    pit_wall: false
+    overtaking: false
+    shift_study: false
+    methods: true
+    style_guide: false             # every component in one place, for design work

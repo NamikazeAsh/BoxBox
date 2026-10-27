@@ -9,6 +9,7 @@ import time
 import fastf1
 import pandas as pd
 import requests
+from fastf1.mvapi.api import get_circuit
 from fastf1.req import RateLimitExceededError
 
 log = logging.getLogger('boxbox.ingest')
@@ -88,6 +89,36 @@ def pull_jolpica_pitstops(cfg, year, rnd):
     races = r.json()['MRData']['RaceTable']['Races']
     rows = [p for race in races for p in race['PitStops']]
     return pd.DataFrame(rows, columns=['driverId', 'lap', 'stop', 'time', 'duration'])
+
+
+def track_map_races(events, cfg):
+    """The latest race at each circuit outside the holdout seasons: the layout the outline is drawn from."""
+    e = events[~events['Year'].isin(cfg['holdout_seasons'])].sort_values(['Year', 'Round'])
+    return e.groupby('Circuit').tail(1)[['Circuit', 'Year', 'Round']].reset_index(drop=True)
+
+
+def pull_track_outline(cfg, circuit, year, rnd):
+    """Circuit outline X, Y and map rotation from the MultiViewer circuit API (the source of FastF1's circuit
+    info), traced from one real lap, so the first point is the finish line. One small request per circuit
+    and no telemetry; the live timing archive started refusing telemetry with 401 (data_issues.md).
+    One file per race, so reruns skip it."""
+    out = cfg['paths']['interim'] / 'track_maps' / f'{year}_{rnd:02d}.parquet'
+    if out.exists():
+        return 'cached'
+
+    def load():
+        s = fastf1.get_session(year, rnd, cfg['ingest']['track_map_session'])
+        s.load(laps=False, telemetry=False, weather=False, messages=False)
+        return s
+
+    key = with_retry(load, cfg).session_info['Meeting']['Circuit']['Key']
+    c = get_circuit(year=year, circuit_key=key)
+    if not c or not c.get('x'):
+        raise ValueError(f'no outline from MultiViewer for circuit key {key}')
+    out.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame({'X': c['x'], 'Y': c['y']}).assign(Circuit=circuit, Year=year, Round=rnd,
+                                                    Rotation=float(c['rotation'])).to_parquet(out)
+    return 'pulled'
 
 
 def pull_season(cfg, year, sessions=None):

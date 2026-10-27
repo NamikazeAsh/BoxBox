@@ -1,0 +1,46 @@
+# BoxBox dashboard theme. Colours match app/theme/__init__.py; change both together.
+[server]
+runOnSave = true
+
+[client]
+toolbarMode = "viewer"   # menu with Settings (light or dark), no Deploy or developer options
+
+[theme]
+font = "Barlow:https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&display=swap"
+headingFont = "'Exo 2':https://fonts.googleapis.com/css2?family=Exo+2:ital,wght@0,500;0,600;0,700;1,700;1,800&display=swap"
+baseRadius = "8px"
+showWidgetBorder = true
+showSidebarBorder = true
+linkUnderline = false
+# Native badges, metric deltas and coloured text use the timing colours (purple best, green better, yellow worse)
+redColor = "#E10600"
+greenColor = "#4FD18B"
+yellowColor = "#E8B800"
+violetColor = "#B98CFF"
+chartCategoricalColors = ["#E10600", "#3AA8FF", "#FFD12E", "#4FD18B", "#B98CFF", "#FF8000", "#27F4D2", "#9A9CA5"]
+
+[theme.dark]
+primaryColor = "#E10600"
+backgroundColor = "#0F1014"
+secondaryBackgroundColor = "#17181D"
+textColor = "#ECECEF"
+borderColor = "#23252C"
+dataframeBorderColor = "#23252C"
+linkColor = "#FF5A4F"
+
+[theme.dark.sidebar]
+backgroundColor = "#0B0C0F"
+secondaryBackgroundColor = "#17181D"
+
+[theme.light]
+primaryColor = "#D10500"
+backgroundColor = "#FAFAFA"
+secondaryBackgroundColor = "#F0F0F3"
+textColor = "#17171B"
+borderColor = "#E3E3E8"
+dataframeBorderColor = "#E3E3E8"
+linkColor = "#D10500"
+
+[theme.light.sidebar]
+backgroundColor = "#F3F3F6"
+secondaryBackgroundColor = "#E9E9EE"
