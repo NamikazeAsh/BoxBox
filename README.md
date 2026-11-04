@@ -103,7 +103,7 @@ Every threshold, assumption and model option lives in `config.yaml`: seasons per
 ## Repository layout
 
 * `src/boxbox/`: `ingest.py` (pulls), `clean.py` (typed tables), `features.py` (all derived definitions), `pipeline.py`, `checks.py`, `evaluate.py` (season splits), `outcome.py` (finishing position predictor).
-* `src/boxbox/degradation/`: one module per model family on a shared task: `task` (clean laps and the anchored forecast), `linear`, `gam` (quadratic and spline curves), `trees` (LightGBM), `bayes`, `ensemble` (averages), `intervals` (conformal), `adjust` (same weekend and in race updates), `compare`.
+* `src/boxbox/degradation/`: one module per model family on a shared task: `task` (clean laps and the anchored forecast), `linear`, `gam` (quadratic and spline curves), `trees` (LightGBM), `bayes`, `ensemble` (averages), `intervals` (conformal), `adjust` (same weekend and in race updates), `compare`; for the simulator, `monotone` (wear that never falls with age), `compound` (fresh tyre gaps between compounds) and `noise` (lap noise shared by a stint and a race). `src/boxbox/pitloss.py`: pit loss per circuit.
 * `app/`: the Streamlit dashboard (pages in `views/`, shared pieces in `components/`, styling in `theme/`); its tables come from `src/boxbox/dashboard.py`.
 * `scripts/`: entry points only.
 * `tests/`: pytest on small synthetic data.

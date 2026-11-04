@@ -8,6 +8,8 @@
 * bayes: hierarchical Bayesian wear rates with race and driver effects.
 * intervals: conformal intervals and interval scores for any model.
 * compare: every model family on the same folds.
+* monotone, compound, noise: simulator inputs (wear that never falls, fresh tyre compound gaps, correlated lap
+  noise). Imported by module, not re exported.
 
 Everything public is re exported here, so `from boxbox import degradation as dg` reaches all of it.
 """

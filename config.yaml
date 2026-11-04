@@ -114,6 +114,24 @@ degradation:
   live_adjust:   # live model only: slope shift from laps the field has run in the same race so far (modelling O9)
     shrink_grid: [10, 20, 40, 80, 160, 320]   # weight of the prior (none, or the weekend shift), in stints
 
+simulator:   # inputs for the strategy simulator (single car, dry, no safety car; modelling D6). Tuned in scripts/tune_*.py
+  wear_model: quadratic            # comparison ladder name; linear is the alternative (choose in the backtest, D12)
+  monotone_wear: true              # wear never falls with tyre age (degradation/monotone.py)
+  max_age: 60                      # monotone curve grid; stint lengths stay within the observed range
+  stint_length_term: false         # D12: off until it comes with a level term
+  compound_pace:   # fresh tyre gap to Medium per circuit (degradation/compound.py, modelling O12)
+    shrink_grid: [0, 5, 10, 20, 50, 100, 200]
+    shrink: 20
+    min_laps: 5                    # clean laps a stint needs for its level
+  noise:   # correlated lap noise (degradation/noise.py)
+    min_laps: 8                    # clean laps a stint needs for its slope
+    draws: 1000
+  pit_loss:   # per circuit median of green flag stops (pitloss.py)
+    recent_grid: [null, 1, 2, 3]   # null: all seasons
+    recent: null                   # all seasons: last 2 was 0.04 s better on validation, within noise (D16)
+    min_stops: 10                  # fewer recent stops than this: use all the circuit's seasons
+    target_min_stops: 5            # races scored in the pit loss test need this many stops
+
 outcome:   # finishing position predictor, classified finishers only (modelling D6, O6)
   exclude_races: [[2021, 12]]      # Belgium 2021: three laps behind the safety car, no racing (data_issues.md)
   quali_gap_clip_pct: 5.0          # cap the qualifying gap (wet sessions, a lap time deleted)
