@@ -18,7 +18,7 @@ def ladder(cfg):
     intervals for the models in degradation.intervals.conformal_models."""
     c = cfg['degradation']
     lv, folds = c['intervals']['levels'], c['intervals']['conformal_folds']
-    lin_kw = dict(stint_length=True, length_ref=c['stint_length_ref'], **lap_terms_kw(cfg))
+    lin_kw = dict(stint_length=c.get('stint_length_term', False), length_ref=c['stint_length_ref'], **lap_terms_kw(cfg))
     g, t = c['gam'], c['lgbm']
     tree = lambda **kw: LGBMDegradation(cfg, num_leaves=t['num_leaves'][0], n_estimators=t['n_estimators'][0],
                                         min_child_samples=t['min_child_samples'], learning_rate=t['learning_rate'], **kw)

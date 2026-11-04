@@ -3,7 +3,7 @@ stints as if they were independent, but stints in the same race share that race'
 departs from its circuit's history by a real 0.027 s per lap). Here those pieces are explicit and their sizes
 are learned:
 
-    slope of stint s = mu[compound] + lam[compound] x (stint length - ref)
+    slope of stint s = mu[compound] + lam[compound] x (stint length - ref)   (lam only with stint_length_term)
                        + circuit and compound effect (spread tau_a[compound])
                        + race effect (tau_r) + team in season effect (tau_g) + stint scatter (tau_u)
 
@@ -63,13 +63,14 @@ class BayesDegradation:
     def __init__(self, cfg, warmup=500, samples=500, chains=2, seed=0):
         self.cfg, self.warmup, self.samples, self.chains, self.seed = cfg, warmup, samples, chains, seed
         self.length_ref = cfg['degradation']['stint_length_ref']
+        self.stint_length = cfg['degradation'].get('stint_length_term', False)
         self.f = AGE_TERMS['linear']
-        self.name = 'bayes hierarchical, stint length, dirty air, race start'
+        self.name = 'bayes hierarchical' + (', stint length' if self.stint_length else '') + ', dirty air, race start'
 
     def fit(self, laps):
         import jax
         from numpyro.infer import MCMC, NUTS
-        self.lin = LinearDegradation(10, stint_length=True, length_ref=self.length_ref, **lap_terms_kw(self.cfg)).fit(laps)
+        self.lin = LinearDegradation(10, stint_length=self.stint_length, length_ref=self.length_ref, **lap_terms_kw(self.cfg)).fit(laps)
         y = laps['LapTimeFC_s'] - self.lin.dirty_air(laps) - self.lin._offset(laps, ['DirtyAir'], exclude=True)
         s = stint_stats(laps, y)
         self.sigma2 = s['rss'].sum() / (s['n'] - 2).clip(lower=1).sum()
@@ -83,7 +84,7 @@ class BayesDegradation:
                     cell_k=self.cells.get_level_values('Compound').map(COMPOUNDS.index).to_numpy(),
                     race=self.races.get_indexer(pd.MultiIndex.from_frame(s[RACE])),
                     team=self.teams.get_indexer(pd.MultiIndex.from_frame(team)),
-                    z=(s['StintLaps'] - self.length_ref).to_numpy(float), se2=(self.sigma2 / s['xx']).to_numpy(),
+                    z=self._z(s).to_numpy(float), se2=(self.sigma2 / s['xx']).to_numpy(),
                     n_cell=len(self.cells), n_race=len(self.races), n_team=len(self.teams))
         mcmc = MCMC(NUTS(_model), num_warmup=self.warmup, num_samples=self.samples, num_chains=self.chains,
                     chain_method='sequential', progress_bar=False)
@@ -104,7 +105,10 @@ class BayesDegradation:
         return self
 
     def _z(self, laps):
-        return laps['StintLaps'] - self.length_ref
+        """Stint length less the reference, or 0 with the term off (degradation.stint_length_term)."""
+        if self.stint_length:
+            return laps['StintLaps'] - self.length_ref
+        return pd.Series(0.0, index=laps.index)
 
     def slopes_for(self, laps):
         m = laps.join(self.cell_mean.rename('_m'), on=KEY)['_m'].fillna(laps['Compound'].map(self.mu)).fillna(0.0)

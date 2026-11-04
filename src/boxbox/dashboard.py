@@ -13,10 +13,8 @@ RACE = ['Year', 'Round']
 # Saved model names to the names the app shows. Anything not listed keeps its own name.
 MODEL_NAMES = {
     'constant pace': 'No tyre wear',
-    'linear, shrink 20, stint length, dirty air, race start': 'Linear',
-    'linear, shrink 10, stint length, dirty air, race start': 'Linear (previous)',
-    'linear, shrink 20, stint length, dirty air, race start, weekend': 'Linear + weekend',
-    'linear, shrink 10, stint length, dirty air, race start, weekend': 'Linear (previous) + weekend',
+    'linear, shrink 10, dirty air, race start': 'Linear',
+    'linear, shrink 10, dirty air, race start, weekend': 'Linear + weekend',
     'quadratic': 'Quadratic',
     'bayes': 'Hierarchical Bayes',
     'lgbm, leaves 8, trees 300': 'LightGBM',
@@ -56,7 +54,7 @@ def pit_loss_by_circuit(pit_loss, year):
 
 def wear_curve(cells, circuit, compound, stint_laps, length_ref, level=0.8):
     """Seconds lost against a tyre on its first lap, at each age through a stint of stint_laps, from the saved
-    linear model: (circuit slope + stint length term) x (f(age) - f(1)). The band holds `level` of laps under
+    linear model: (circuit slope + stint length term, 0 when off) x (f(age) - f(1)). The band holds `level` of laps under
     the cell's lap noise. A circuit without the compound falls back to the compound's pooled slope."""
     c = cells[(cells['Circuit'] == circuit) & (cells['Compound'] == compound)]
     pooled = cells[cells['Compound'] == compound]

@@ -56,7 +56,7 @@ fig.update_xaxes(title_text='tyre age, laps', range=[0.5, laps + 0.5])
 fig.update_yaxes(title_text='seconds lost against lap one')
 theme.plot(fig, height=400, key='wear')
 st.caption(f'Shaded: where {dash["interval_level"]:.0%} of {name.lower()} laps land around the curve. Other compounds in grey, '
-           f'for the same stint length.' + ('' if cur['FromCircuit'].iloc[0] else
+           f'over the same laps.' +('' if cur['FromCircuit'].iloc[0] else
                                             f' No {name.lower()} history at {circuit}: this is the average over all circuits.'))
 
 section('How the models score', f'{test_year} test season')
@@ -70,7 +70,7 @@ with models:
     score_table(rows, [('Model', 'Model', None), ('MAE_s', 'Error, s per lap', '{:.3f}'), ('Bias_s', 'Bias, s', '{:+.3f}'),
                        ('Cover80', '80% band hit rate', '{:.0%}'), ('N', 'Laps', '{:,.0f}')],
                 best=['MAE_s'], base={'No tyre wear'},
-                note=f'Trained on {train[0]} to {train[-1]}, scored once on {test_year}. Purple marks the lowest error. '
+                note=f'Trained on {train[0]} to {train[-1]}, scored on {test_year}. Purple marks the lowest error. '
                      'Each stint\'s first clean laps set its pace; the models forecast the rest.')
 with air:
     off = dashboard.offsets(cfg)
@@ -104,10 +104,11 @@ with how:
                  f'{cfg["clean_lap"]["traffic_gap_s"]} s of the car ahead and outliers. Fuel corrected at '
                  f'{cfg["fuel"]["s_per_kg"]} s per kg.'),
         ('Model', f'Lap time = stint pace + wear rate x tyre age, one rate per circuit and compound, pulled toward the '
-                  f'compound average where a circuit has few stints. The rate changes with planned stint length '
-                  f'(reference {dg["stint_length_ref"]} laps).'),
+                  f'compound average where a circuit has few stints.'
+                  + (f' The rate changes with planned stint length (reference {dg["stint_length_ref"]} laps).'
+                     if cells['LengthCoef'].abs().max() > 0 else '')),
         ('Task', f'The first {dg["anchor_laps"]} clean laps of a stint set its pace; the model forecasts every later clean lap.'),
         ('Split', f'Whole seasons, never random laps. Models chosen on {", ".join(str(y) for _, y in evaluate.season_splits(seasons)["validation"])}; '
-                  f'{test_year} scored once at the end.'),
+                  f'{test_year} scored for the chosen models (several times during development).'),
         ('Baseline', 'No tyre wear: every lap as fast as the stint\'s first laps.'),
     ])

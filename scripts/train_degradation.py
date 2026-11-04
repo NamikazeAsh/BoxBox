@@ -17,7 +17,7 @@ from boxbox import degradation, evaluate
 from boxbox.config import load_config, seasons_for
 from boxbox.degradation import compare
 
-REFERENCE = 'linear, shrink 10, stint length, dirty air, race start'   # previous final model (modelling D8)
+REFERENCE = 'linear, shrink 10, dirty air, race start'   # D8 without the stint length term (modelling O11)
 SIMULATOR = 'simulator average'   # the wear model the strategy simulator uses (modelling D11)
 
 cfg = load_config()

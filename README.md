@@ -19,7 +19,7 @@ The 2026 season brought new power unit, aerodynamic, and tyre regulations. This 
 
 Trained on earlier seasons, tested on 2025:
 
-* **Tyre degradation:** predicts each lap within 0.62 s on average, against 0.76 s with no wear model. Wear is close to linear in tyre age, and running 1 to 1.5 s behind another car costs about 0.26 s a lap.
+* **Tyre degradation:** predicts each lap within 0.66 s on average, against 0.76 s with no wear model (0.65 s averaged with the Bayesian model). Wear is close to linear in tyre age, and running 1 to 1.5 s behind another car costs about 0.26 s a lap.
 * **Finishing position:** 2.35 places average error, against 2.46 for grid order.
 * **Key finding:** how fast tyres wear changes from race to race in ways nothing before the race predicts.
 
@@ -30,12 +30,12 @@ A local Streamlit app (`streamlit run app/main.py`) with dark and light themes.
 ![Paddock: headline numbers and the predicted top ten for the last 2025 race](docs/images/paddock.png)
 
 <p>
-  <img src="docs/images/tyre_lab.png" width="49%" alt="Tyre Lab: wear curve for a circuit, compound and stint length">
+  <img src="docs/images/tyre_lab.png" width="49%" alt="Tyre Lab: wear curve for a circuit and compound">
   <img src="docs/images/race_predictor.png" width="49%" alt="Race Predictor: predicted against actual finishing order">
 </p>
 
 * **Paddock:** headline results, the predicted top ten for a race, safety car rates and pit loss by circuit.
-* **Tyre Lab:** wear curve for any circuit, compound and stint length, with its uncertainty band and how each model scored.
+* **Tyre Lab:** wear curve for any circuit and compound, with its uncertainty band and how each model scored.
 * **Race Predictor:** predicted, actual and grid order for every 2025 race, with each driver's tyre strategy.
 * **Methods:** the splits, metrics and baselines behind every number.
 
@@ -61,7 +61,7 @@ Derived quantities (one definition each, in `src/boxbox/features.py`):
 ## Approach
 
 1. **Tyre degradation.** Lap time is a stint's own pace level plus a wear rate times tyre age. The level comes from each stint's first laps, so the wear rate is learned only from how lap times change within a stint, not from comparing fast and slow cars. Wear rates are estimated per circuit and compound and blended toward the compound average where history is thin. Compared against a quadratic and a smooth (GAM) wear curve, LightGBM, and a hierarchical Bayesian model (NumPyro) that learns how much circuits, races, teams and stints differ. Conformal intervals give every model a calibrated spread.
-2. **Strategy simulation (next.** Total race time for each legal pit strategy from the degradation model, pit loss per circuit and sampled lap noise, with Monte Carlo for safety cars; later a full field version with a learned overtaking model, following Heilmeier et al. [4, 5].
+2. **Strategy simulation (next).** Total race time for each legal pit strategy from the degradation model, pit loss per circuit and sampled lap noise, with Monte Carlo for safety cars; later a full field version with a learned overtaking model, following Heilmeier et al. [4, 5].
 3. **Outcome prediction.** Ridge regression ranking each race's classified finishers from information known before the start.
 4. **Distribution shift.** Rehearse the method on the known 2021 to 2022 regulation change, then apply it to 2026: do the degradation curves and the predictor's errors shift, and how quickly can the models adapt?
 5. **Dashboard.** Streamlit app combining the predictor and the simulator.

@@ -35,7 +35,7 @@ stats([
 definitions([
     ('Training', f'{deg_seasons[0]} to {deg_seasons[-1]}: the 18 inch tyre, ground effect era.'),
     ('Validation', f'Train on the seasons before, score {seq(y for _, y in split(deg_seasons)["validation"])}. Models are chosen here.'),
-    ('Test', f'Train on {seq(split(deg_seasons)["test"][0])}, score {split(deg_seasons)["test"][1]} once for the chosen models.'),
+    ('Test', f'Train on {seq(split(deg_seasons)["test"][0])}, score {split(deg_seasons)["test"][1]} for the chosen models (several times during development).'),
     ('Metric', 'Mean absolute error of each forecast lap in seconds, plus interval hit rate where a model gives intervals.'),
     ('Baseline', 'No tyre wear: every lap as fast as the stint\'s first clean laps.'),
 ])

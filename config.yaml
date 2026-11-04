@@ -68,9 +68,10 @@ degradation:
   shrink_grid: [0, 5, 10, 20, 50, 100]   # weight of the compound slope, in stints; tuned on validation
   age_terms: [linear]   # sqrt and log tested 2026-10-14 (experiments.md): no gain on validation, worse on test
   decay_grid: [1.0]   # recency weights 0.7, 0.5, 0.3 tested 2026-10-14: at most 0.002 s better, not worth it
-  stint_length_options: [false, true]     # slope varies with planned stint length (mostly tyre management, experiments.md)
+  stint_length_options: [false]           # linear grid; true scored with the realised stint length, which is look ahead (modelling O11)
+  stint_length_term: false                # comparison models, LightGBM feature and study scripts; off since 2026-10-28 (O11)
   stint_length_ref: 20                    # stint length, in laps, at which the circuit slope applies
-  lap_terms_options: [false, true]        # dirty air and race start offsets, fitted with the slopes
+  lap_terms_options: [true]               # dirty air and race start offsets (D8); without them 0.0018 s better on validation, under the 0.005 bar, bias +0.06 vs -0.01 (2026-10-28)
   dirty_air_bins: [1.0, 1.5, 2.0, 2.5, 3.0]   # gap to the car ahead, s; beyond the last edge is clean air
   race_start_laps: 3                      # one offset per race lap 2 to this lap
   train_clean:   # fitting only; scored laps unchanged. Off: 0.0007 s on validation (experiments.md 2026-10-18)

@@ -41,15 +41,17 @@ class LGBMDegradation:
         self.params = dict(num_leaves=num_leaves, n_estimators=n_estimators, min_child_samples=min_child_samples,
                            learning_rate=learning_rate, subsample=0.8, subsample_freq=1, colsample_bytree=0.8,
                            linear_tree=linear_tree, random_state=seed, n_jobs=4, verbose=-1)
+        # The realised stint length is unknown at the anchor (modelling O11), so it is a feature only with the term on
+        self.features = [f for f in FEATURES if f != 'StintLaps' or cfg['degradation'].get('stint_length_term', False)]
         if monotone:
-            self.params['monotone_constraints'] = [1 if f == 'LapsAheadN' else 0 for f in FEATURES]
+            self.params['monotone_constraints'] = [1 if f == 'LapsAheadN' else 0 for f in self.features]
         self.name = (f'lgbm {objective}, leaves {num_leaves}, trees {n_estimators}' + (', linear leaves' if linear_tree else '')
                      + (', monotone' if monotone else ''))
 
     def fit(self, laps):
         self.circuits = {c: n for n, c in enumerate(sorted(laps['Circuit'].unique()))}
         f = tree_frame(laps, self.cfg, self.circuits)
-        fit = lambda **kw: lgb.LGBMRegressor(**self.params, **kw).fit(f[FEATURES], f['Target'], categorical_feature=CATEGORICAL)
+        fit = lambda **kw: lgb.LGBMRegressor(**self.params, **kw).fit(f[self.features], f['Target'], categorical_feature=CATEGORICAL)
         if self.objective == 'quantile':
             self.models = {q: fit(objective='quantile', alpha=q) for q in self.levels}
         elif self.objective == 'huber':
@@ -61,16 +63,16 @@ class LGBMDegradation:
     def forecast(self, laps, cfg):
         p = tree_frame(laps, cfg, self.circuits)
         if self.objective == 'quantile':
-            q = np.sort(np.column_stack([self.models[l].predict(p[FEATURES]) for l in self.levels]), axis=1)  # no crossing
+            q = np.sort(np.column_stack([self.models[l].predict(p[self.features]) for l in self.levels]), axis=1)  # no crossing
             for col, v in zip(quantile_columns(self.levels), q.T):
                 p[col] = p['Level'] + v
             p['Pred_s'] = p['Level'] + q[:, len(self.levels) // 2]
         else:
-            p['Pred_s'] = p['Level'] + self.models[None].predict(p[FEATURES])
+            p['Pred_s'] = p['Level'] + self.models[None].predict(p[self.features])
         p['Err_s'] = p['Pred_s'] - p['LapTimeFC_s']
         return p.drop(columns=['Target'])
 
     def importance(self):
         m = next(iter(self.models.values()))
-        g = pd.Series(m.booster_.feature_importance('gain'), index=FEATURES)
+        g = pd.Series(m.booster_.feature_importance('gain'), index=self.features)
         return g / g.sum()
