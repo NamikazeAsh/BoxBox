@@ -8,6 +8,7 @@ holdout_seasons: [2026]
 training_seasons:
   degradation: [2022, 2023, 2024, 2025]       # 18 inch tyres and ground effect cars only
   overtaking: [2022, 2023, 2024, 2025]        # passing changed with the 2022 cars
+  pit_decision: [2022, 2023, 2024, 2025]      # strategy changed with the 18 inch tyres
   pit_loss: [2019, 2020, 2021, 2022, 2023, 2024, 2025]
   safety_car: [2019, 2020, 2021, 2022, 2023, 2024, 2025]
   outcome: [2019, 2020, 2021, 2022, 2023, 2024, 2025]   # with an era feature
@@ -131,6 +132,33 @@ simulator:   # inputs for the strategy simulator (single car, dry, no safety car
     recent: null                   # all seasons: last 2 was 0.04 s better on validation, within noise (D16)
     min_stops: 10                  # fewer recent stops than this: use all the circuit's seasons
     target_min_stops: 5            # races scored in the pit loss test need this many stops
+
+pit_decision:   # rival pit stops for the simulator (pitdecision.py): pit or not at the end of each lap, then which tyre
+  # v1: dry races, green flag laps, tyre change stops only. Safety cars and gap/position features come in v2.
+  first_lap: 2                     # stops at the end of lap 1 are damage, not strategy
+  neutral_cooldown_laps: 1         # laps after a SC, VSC or red flag lap left out (stop timing distorted)
+  age_shrink: 50                   # baseline: pit rate per compound and tyre age pulled toward the compound rate, in laps
+  age_bin: 3                       # baseline tyre age bin, laps
+  logit_C: [0.01, 0.1, 1.0]        # inverse ridge penalty, standardised features
+  spline_knots: 6                  # knots on tyre age, laps left and race fraction
+  lgbm:
+    num_leaves: [8, 16]
+    n_estimators: [200, 500]
+    min_child_samples: 200
+    learning_rate: 0.03
+  timing_C: [0.01, 0.1, 1.0]       # plan first timing hazard (adds planned stops left, the stint length the plan implies)
+  plan:   # stop count drawn per rival before the race: 1, 2 or 3+ (experiments 2026-11-05)
+    C: [0.01, 0.1, 1.0]            # multinomial logit, chosen on validation log loss over green races
+    decay: [1.0, 0.5, 0.25]        # season weight decay ** (seasons before the latest); stops fall every season
+    neutral_scale: 10              # SC, VSC, red flag flags scaled after standardising: 100x weaker penalty
+    circuit_shrink: 40             # circuit mean stops pulled toward the overall mean, in drivers
+  tyre_C: 1.0                      # tyre choice multinomial logit
+  force_new_compound_laps_left: 20 # one compound used so far and fewer laps left than this: the next tyre must differ
+  force_stop_laps_left: 3          # replay: two compound rule unmet with this many laps left forces a stop
+  replay:
+    draws: 200                     # simulated races per scored race
+    green_races_only: true         # score replays only on races with no SC, VSC or red flag (v1 has no safety cars)
+    seed: 0
 
 outcome:   # finishing position predictor, classified finishers only (modelling D6, O6)
   exclude_races: [[2021, 12]]      # Belgium 2021: three laps behind the safety car, no racing (data_issues.md)
