@@ -18,7 +18,7 @@ class StubLap:
         def draw_laps(rng, shape):
             return np.zeros(shape)
 
-    def free_air(self, base, circuit, compound, age, lap, race_laps):
+    def free_air(self, base, circuit, compound, age, lap, race_laps, rep=None):
         return np.broadcast_to(base, np.shape(compound)).astype(float) + 0.0
 
     def dirty_air(self, gap):
@@ -151,3 +151,47 @@ def test_search_groups_near_ties_and_flags_clearly_worse_strategies(monkeypatch)
     assert best.loc[0, 'Tier'] == 'best' and (one['Tier'] != 'worse').all() and (one['DeltaPlace'] == 0).all()
     assert (two['Tier'] == 'worse').all() and np.allclose(two['DeltaPlace'], 2) and (two['PBeatsBest'] == 0).all()
     assert (rc.tie_summary(best)['Stops'] == 1).all()
+
+
+def test_each_draw_reads_its_own_tyre_model_refit():
+    from boxbox.simulator.laptime import LapModel
+    lm = LapModel.__new__(LapModel)
+    lm.max_age = 3
+    lm.wear_grid = {'Monza': np.zeros((3, 3))}
+    lm.gaps = {'Monza': np.zeros(3)}
+    lm.boot = {'wear': {'Monza': np.stack([np.zeros((3, 3)), np.ones((3, 3))])},
+               'gap': {'Monza': np.array([[0.0, 0.0, 0.0], [-1.0, 0.0, 0.5]])}, 'evolution': np.array([0.0, 0.0])}
+    comp, age = np.array([[0, 2], [0, 2]]), np.ones((2, 2))
+    assert lm.n_boot == 2
+    assert np.array_equal(lm.wear('Monza', comp, age, rep=np.array([0, 1])), [[0, 0], [1, 1]])
+    assert np.array_equal(lm.gap('Monza', comp, rep=np.array([1, 0])), [[-1.0, 0.5], [0.0, 0.0]])
+    assert np.array_equal(lm.wear('Monza', comp, age), np.zeros((2, 2)))   # no rep: the main fit
+
+
+def test_wear_grid_rows_follow_the_engine_compound_order():
+    """The grid's compound axis must be COMPOUNDS order (Soft, Medium, Hard), not alphabetical."""
+    from boxbox.simulator.laptime import LapModel
+
+    class Wear:
+        def fit(self, laps):
+            return self
+
+        def wear(self, g):
+            return g['Compound'].map({'SOFT': 3.0, 'MEDIUM': 2.0, 'HARD': 1.0}) * g['TyreLife']
+
+    class Pace:
+        def gap(self, c, k):
+            return pd.Series(0.0, index=k.index)
+    lm = LapModel.__new__(LapModel)
+    lm.max_age = 4
+    lm._cfg = {'simulator': {'wear_model': 'x', 'compound_pace': {'shrink': 1, 'min_laps': 1}}}
+    import boxbox.simulator.laptime as lt
+    orig = (lt.compare.ladder, lt.CompoundPace)
+    lt.compare.ladder = lambda cfg: {'x': Wear}
+    lt.CompoundPace = lambda *a: type('P', (), {'fit': lambda self, w, l: Pace()})()
+    lm._cfg['simulator']['monotone_wear'] = False
+    try:
+        _, _, _, grid, _ = lm._fit_tyres(None, pd.DataFrame({'Circuit': ['Monza']}), ['Monza', 'Baku'])
+    finally:
+        lt.compare.ladder, lt.CompoundPace = orig
+    assert np.allclose(grid['Monza'][:, 0], [3.0, 2.0, 1.0])     # Soft, Medium, Hard at age 1

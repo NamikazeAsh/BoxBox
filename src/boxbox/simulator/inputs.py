@@ -44,7 +44,8 @@ class SimInputs:
         training seasons. rule_factory, pace_factory: the chosen passing rule and pace model (make one)."""
         cfg = self._cfg
         laps = t['laps']
-        self.lap = LapModel(cfg).fit(laps, years, laps['Circuit'].unique())
+        u = cfg['simulator'].get('uncertainty', {})
+        self.lap = LapModel(cfg).fit(laps, years, laps['Circuit'].unique(), u.get('bootstrap', 0), u.get('seed', 0))
         free = ot.free_air_laps(laps, self.lap, years)
         pairs = ot.pass_pairs(laps.loc[free.index], free, self.window_s)
         self.rule = rule_factory().fit(pairs)

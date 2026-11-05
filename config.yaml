@@ -132,6 +132,9 @@ simulator:   # inputs for the strategy simulator (single car, dry, no safety car
     recent: null                   # all seasons: last 2 was 0.04 s better on validation, within noise (D16)
     min_stops: 10                  # fewer recent stops than this: use all the circuit's seasons
     target_min_stops: 5            # races scored in the pit loss test need this many stops
+  uncertainty:   # compound gaps, wear curves and track evolution refitted on resampled training races (laptime.py)
+    bootstrap: 30                  # refits; each Monte Carlo draw races on one. 0 switches it off
+    seed: 0
   pace:   # each car's base pace, % behind the race's fastest base, from pre race features (simulator/pace.py)
     ridge_alpha: [0.1, 1, 10, 100]
     chosen: 'ridge, alpha 100'     # scripts/train_simulator.py, validation MAE 0.436 % (QualiGap only 0.520) 2026-11-05

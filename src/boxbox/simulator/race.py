@@ -19,7 +19,7 @@ import pandas as pd
 from boxbox.simulator import strategy as st
 
 
-def simulate(inputs, circuit, race_laps, bases, arrays, rule=None, seed=0):
+def simulate(inputs, circuit, race_laps, bases, arrays, rule=None, seed=0, use_boot=True):
     """bases: draws x cars, s (cars in grid order); arrays: strategy.to_arrays for the same cars. rule: the
     passing rule (default inputs.rule). Returns {'Time': draws x cars, 'Place': draws x cars (1 is the
     winner), 'Passes': draws, 'Pairs': draws (cars starting a lap within window_s of the car ahead)}."""
@@ -31,12 +31,15 @@ def simulate(inputs, circuit, race_laps, bases, arrays, rule=None, seed=0):
     slope = lm.noise.draw_slopes(rng, D, [(0, 0)] * (N * K)).reshape(D, N, K)   # one race draw shared by all
     loss = inputs.pit.sample(circuit, rng, D * N * K).reshape(D, N, K)
     thr, beta = rule.threshold(circuit), rule.beta
+    B = getattr(lm, 'n_boot', 0) if use_boot else 0
+    rp = np.arange(D) % B if B else None          # each draw races on one refit of the tyre model
     hold, window, fg = getattr(rule, 'hold', True), inputs.window_s, inputs.follow_gap_s
 
     k = np.zeros((D, N), int)
     take = lambda a: np.take_along_axis(a, k[..., None], axis=2)[..., 0]
     comp, age = take(arrays['Comp']), take(arrays['Age'])
     passes, pairs = np.zeros(D, int), np.zeros(D, int)
+    by_lap = np.zeros((D, race_laps + 1), int)
     out_lap = np.zeros((D, N), bool)
 
     def pit(t, T):
@@ -49,13 +52,13 @@ def simulate(inputs, circuit, race_laps, bases, arrays, rule=None, seed=0):
         return T, now
 
     # lap 1, grid order
-    free = lm.free_air(bases, circuit, comp, age, 1, race_laps) + take(slope) * age
+    free = lm.free_air(bases, circuit, comp, age, 1, race_laps, rp) + take(slope) * age
     gaps = inputs.start_gap(N)
     T = free[:, :1] + inputs.lap1_extra(circuit) + gaps[None, :]
     T, out_lap = pit(1, T)
 
     for t in range(2, race_laps + 1):
-        free = lm.free_air(bases, circuit, comp, age, t, race_laps) + take(slope) * age
+        free = lm.free_air(bases, circuit, comp, age, t, race_laps, rp) + take(slope) * age
         stop_now = take(arrays['Stop']) == t
         own = free + lm.noise.draw_laps(rng, (D, N)) + np.where(stop_now, take(loss), 0.0)
         order = np.argsort(T, axis=1, kind='stable')
@@ -69,6 +72,7 @@ def simulate(inputs, circuit, race_laps, bases, arrays, rule=None, seed=0):
             meet = same & (b < a_new + fg)
             close = same & (gap[:, j] < window)
             pairs += close
+            by_lap[:, t] += close
             ok = meet & close & (free_o[:, j - 1] - free_o[:, j] - beta * gap[:, j] > thr)
             passes += ok & (b < a_new)
             if hold:
@@ -77,7 +81,7 @@ def simulate(inputs, circuit, race_laps, bases, arrays, rule=None, seed=0):
         T[rows, order] = new
         _, out_lap = pit(t, np.zeros_like(T))   # tyre change after the in lap (its loss is already in own)
     place = np.argsort(np.argsort(T, axis=1, kind='stable'), axis=1) + 1
-    return {'Time': T, 'Place': place, 'Passes': passes, 'Pairs': pairs}
+    return {'Time': T, 'Place': place, 'Passes': passes, 'Pairs': pairs, 'PairsByLap': by_lap}
 
 
 def summarise(res, drivers):
