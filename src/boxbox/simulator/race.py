@@ -106,17 +106,19 @@ def free_air_race_time(inputs, circuit, race_laps, base, strategies, start_age=1
 
 
 def best_strategies(inputs, circuit, race_laps, drivers, bases, rival_stints, user, cfg, start_age=1.0,
-                    start_compounds=None, seed=0, extra=()):
+                    start_compounds=None, seed=0, extra=(), use_caps=True):
     """Rank every legal strategy for the user's car (a driver in drivers) against the rivals' strategies
     (stints frame, one strategy per draw or one for all). Coarse pass: free air race time of every legal
     strategy; the refine_top best per stop count and the overall best are raced against the field with the same
     rival and noise draws (common random numbers). bases: draws x cars. extra: more (compounds, stop laps) to
-    race whatever their coarse rank (e.g. the strategy the car really ran). Returns one row per raced strategy,
+    race whatever their coarse rank (e.g. the strategy the car really ran). use_caps: keep stints within the
+    circuit's stint caps (inputs.caps, strategy.stint_caps). Returns one row per raced strategy,
     best first: stops, compounds, stop laps, the user's mean place, P(win), P(podium), P(points), median time."""
     r = cfg['simulator']['race']
     D = bases.shape[0]
     u = list(drivers).index(user)
-    cand = st.legal_strategies(race_laps, cfg, start_compounds or st.COMPOUNDS, start_age) + [tuple(map(tuple, e)) for e in extra]
+    caps = st.caps_for(inputs.caps, circuit) if getattr(inputs, 'caps', None) is not None and use_caps else None
+    cand = st.legal_strategies(race_laps, cfg, start_compounds or st.COMPOUNDS, start_age, caps) + [tuple(map(tuple, e)) for e in extra]
     t = free_air_race_time(inputs, circuit, race_laps, float(np.median(bases[:, u])), cand, start_age)
     c = pd.DataFrame({'i': range(len(cand)), 'Stops': [len(s) for _, s in cand], 'FreeAir_s': t})
     keep = pd.concat([c.sort_values('FreeAir_s').groupby('Stops').head(r['refine_top'])['i'],

@@ -1,13 +1,14 @@
 """Backtest the strategy simulator v1 on historical green flag dry races (simulator/backtest.py).
 
-    python scripts/backtest_simulator.py [--validation]
+    python scripts/backtest_simulator.py [--validation] [--search]
 
 Each scored season is simulated with inputs (lap model, passing rule, pace model) and a rival pit policy fitted
 on the seasons before it. Variants: pace (oracle: each car's real race base; model: drawn from the pace model)
 x strategies (real; model: drawn from the rival pit model) x passing rule (the chosen circuit threshold, one
 global threshold, free passing, no passing). Places are scored as the finishing position predictor is (place
 among the classified finishers), against the grid order and the outcome ridge model trained on the same seasons.
-Then a spot check: the strategy search for one race's winner, with the strategy they really ran added.
+--search also runs the strategy search for the top 3 of every race, with and without stint caps, and reports
+where the strategy they really ran ranks (about 20 minutes for the two validation seasons).
 --validation scores 2023 and 2024 only.
 """
 import sys
@@ -16,7 +17,7 @@ import joblib
 import numpy as np
 import pandas as pd
 
-from boxbox import evaluate, outcome, overtaking as ot, pitdecision as pdm
+from boxbox import evaluate, features, outcome, overtaking as ot, pitdecision as pdm
 from boxbox.config import load_config, seasons_for
 from boxbox.simulator import backtest as bt, pace as pc, race as rc, strategy as st
 from boxbox.simulator.inputs import SimInputs
@@ -38,7 +39,7 @@ entries = outcome.entries(t['results'], t['qualifying'], t['sprint_results'], t[
 alpha = joblib.load(cfg['paths']['models'] / 'outcome_ridge.joblib').alpha
 pd.set_option('display.width', 250)
 
-all_rows, all_passes, spot = [], [], None
+all_rows, all_passes, spots = [], [], []
 for train, year in folds:
     inputs = SimInputs(cfg).fit(t, pre, train, rules[chosen_rule], paces[chosen_pace])
     policy = pdm.fit_plan_policy(laps, pre, t['results'], stops, train, cfg)
@@ -65,8 +66,7 @@ for train, year in folds:
     te = entries.merge(yr[['Year', 'Round', 'Driver']], on=['Year', 'Round', 'Driver'])
     all_rows.append(outcome.ranked(te, m.score(te)).assign(Variant='outcome predictor (ridge)', MeanPlace=lambda d: d['Pred'],
                                                             NewCircuit=True)[['Year', 'Round', 'Driver', 'Variant', 'MeanPlace', 'Finish', 'Grid', 'NewCircuit']])
-    if spot is None and year == 2024:
-        spot = (inputs, policy, year)
+    spots.append((inputs, policy, year))
 
 rows = pd.concat(all_rows, ignore_index=True)
 sim = rows[rows['Variant'] != 'outcome predictor (ridge)']
@@ -86,30 +86,40 @@ pcols = [c for c in pas.columns if c.startswith('oracle pace, real strategies') 
 print('on track passes and close pairs per race, oracle pace and real strategies (mean over races)')
 print(pas.groupby('Year')[pcols].mean().T.round(1).to_string(), '\n')
 
-# Spot check: the strategy search for the winner of Monza 2024 (or the season's first green race)
-inputs, policy, year = spot
-races = bt.green_races(laps, [year])
-race = races[races['Circuit'] == 'Monza'].iloc[0] if (races['Circuit'] == 'Monza').any() else races.iloc[0]
-truth = bt.race_truth(laps, t['results'], year, race['Round'])
-real = st.real_stints(t['stints'], year, race['Round'], truth['Driver'])
-truth = truth[truth['Driver'].isin(real['Driver'])].reset_index(drop=True)
-drivers = truth['Driver'].tolist()
-winner = truth.loc[truth['Finish'] == 1, 'Driver'].iloc[0]
-race_laps = int(laps.loc[(laps['Year'] == year) & (laps['Round'] == race['Round']), 'LapNumber'].max())
-cars = truth[['Driver']].assign(Year=year, Round=race['Round']).merge(pre, on=['Year', 'Round', 'Driver'], how='left')
-rng = np.random.default_rng(r['seed'])
-bases = inputs.sample_bases(cars, race['Circuit'], r['refine_draws'], rng)
-starts = pdm.race_starts(laps, pre, t['results'], [year], cfg, green_only=False)
-starts = starts[(starts['Round'] == race['Round']) & starts['Driver'].isin(drivers)].reset_index(drop=True)
-rivals = st.model_stints(policy, starts, r['refine_draws'], r['seed'])
-missing = set(drivers) - set(starts['Driver'])
-rivals = st.override(rivals, real[real['Driver'].isin(missing)]) if missing else rivals
-mine = real[real['Driver'] == winner].sort_values('Stint')
-actual = (tuple(mine['Compound']), tuple(int(x) - 1 for x in mine['StartLap'].iloc[1:]))
-w = mine.iloc[0]
-best = rc.best_strategies(inputs, race['Circuit'], race_laps, drivers, bases, rivals, winner, cfg,
-                          start_age=float(w['StartAge']), start_compounds=[w['Compound']], extra=[actual])
-print(f"strategy search, {winner} at {race['Circuit']} {year} (grid {int(truth.loc[truth['Driver'] == winner, 'Grid'].iloc[0])}, "
-      f"model pace, rivals from the pit model, {r['refine_draws']} draws); real: {'-'.join(c[0] for c in actual[0])} stopping {actual[1]}")
-print(best.head(12).round(3).to_string())
-print('real strategy:', best.index[best['Extra']].tolist(), 'of', len(best), 'raced')
+if '--search' not in sys.argv:
+    sys.exit()
+
+# Strategy search check: for the top 3 of every green race, where the strategy they really ran ranks among the
+# searched ones (model pace, rivals from the pit model), with and without the stint caps
+print('stint caps: share of the scored seasons\' real stints within them')
+for inputs, policy, year in spots:
+    print(f'  {year}: {bt.cap_coverage(t["stints"], t["events"], inputs.caps, features.wet_races(laps), [year]):.3f}')
+checks = []
+for inputs, policy, year in spots:
+    for race in bt.green_races(laps, [year]).itertuples():
+        truth = bt.race_truth(laps, t['results'], year, race.Round)
+        for driver in truth.sort_values('Finish')['Driver'].head(3):
+            for caps in [True, False]:
+                try:
+                    best, actual, grid = bt.strategy_search(inputs, policy, t, pre, year, race.Round, race.Circuit, driver, cfg,
+                                                            r['coarse_draws'] * 4, use_caps=caps, seed=r['seed'])
+                except (IndexError, ValueError):
+                    continue
+                me = best[best['Extra']].iloc[0]
+                top = best.iloc[0]
+                checks.append({'Year': year, 'Round': race.Round, 'Circuit': race.Circuit, 'Driver': driver, 'Caps': caps,
+                               'Real': '-'.join(c[0] for c in actual[0]) + ' ' + ','.join(map(str, actual[1])),
+                               'Best': top['Compounds'] + ' ' + top['StopLaps'], 'RealRank': int(best.index[best['Extra']][0]) + 1,
+                               'Raced': len(best), 'RealStops': len(actual[1]), 'BestStops': int(top['Stops']),
+                               'PlaceLoss': me['MeanPlace'] - top['MeanPlace'],
+                               'BestSoftLaps': top['Compounds'].split('-').count('S')})
+c = pd.DataFrame(checks)
+summary = c.groupby(['Year', 'Caps']).agg(Searches=('Driver', 'size'), RealRankMedian=('RealRank', 'median'),
+                                          RealInTop3=('RealRank', lambda x: (x <= 3).mean()),
+                                          SameStops=('RealStops', lambda x: (x == c.loc[x.index, 'BestStops']).mean()),
+                                          PlaceLoss=('PlaceLoss', 'mean'), Raced=('Raced', 'median'))
+print('strategy search on real top 3 finishers (RealRank: rank of their real strategy; PlaceLoss: its mean place minus the best\'s)')
+print(summary.round(3).to_string(), '\n')
+print('best stop count vs real, with caps'); print(pd.crosstab(c.loc[c['Caps'], 'RealStops'], c.loc[c['Caps'], 'BestStops']).to_string(), '\n')
+m = c[(c['Circuit'] == 'Monza')]
+print('Monza'); print(m[['Year', 'Driver', 'Caps', 'Real', 'Best', 'RealRank', 'Raced', 'PlaceLoss']].round(3).to_string(index=False))

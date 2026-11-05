@@ -101,3 +101,42 @@ def real_passes(laps, lap_model, year, window_s):
     free = ot.free_air_laps(laps, lap_model, [year])
     p = ot.pass_pairs(laps.loc[free.index], free, window_s)
     return p.groupby(RACE)['Pass'].agg(Passes='sum', Pairs='size')
+
+
+def strategy_search(inputs, policy, t, pre, year, rnd, circuit, driver, cfg, draws, use_caps=True, seed=0):
+    """The strategy search (race.best_strategies) for one car of a past race: model pace, rivals from the pit
+    model (real strategies for cars with no lap 1 tyre data), the car's real start tyre, and its real strategy
+    raced too (row with Extra). Returns the ranked table."""
+    laps = t['laps']
+    truth = race_truth(laps, t['results'], year, rnd)
+    real = st.real_stints(t['stints'], year, rnd, truth['Driver'])
+    truth = truth[truth['Driver'].isin(real['Driver'])].reset_index(drop=True)
+    drivers = truth['Driver'].tolist()
+    race_laps = int(laps.loc[(laps['Year'] == year) & (laps['Round'] == rnd), 'LapNumber'].max())
+    cars = truth[['Driver']].assign(Year=year, Round=rnd).merge(pre, on=['Year', 'Round', 'Driver'], how='left')
+    rng = np.random.default_rng(seed)
+    ref = None
+    if circuit not in inputs.refs:
+        b = inputs.lap.driver_bases(inputs.lap.stint_levels(laps, [year]))
+        ref = float(b[(b['Year'] == year) & (b['Round'] == rnd)]['Base'].median())
+    bases = inputs.sample_bases(cars, circuit, draws, rng, ref=ref)
+    starts = pdm.race_starts(laps, pre, t['results'], [year], cfg, green_only=False)
+    starts = starts[(starts['Round'] == rnd) & starts['Driver'].isin(drivers)].reset_index(drop=True)
+    rivals = st.model_stints(policy, starts, draws, seed)
+    missing = set(drivers) - set(starts['Driver'])
+    rivals = st.override(rivals, real[real['Driver'].isin(missing)]) if missing else rivals
+    mine = real[real['Driver'] == driver].sort_values('Stint')
+    actual = (tuple(mine['Compound']), tuple(int(x) - 1 for x in mine['StartLap'].iloc[1:]))
+    w = mine.iloc[0]
+    best = rc.best_strategies(inputs, circuit, race_laps, drivers, bases, rivals, driver, cfg, start_age=float(w['StartAge']),
+                              start_compounds=[w['Compound']], extra=[actual], use_caps=use_caps, seed=seed)
+    return best, actual, int(truth.loc[truth['Driver'] == driver, 'Grid'].iloc[0])
+
+
+def cap_coverage(stints, events, caps, wet, years):
+    """Share of real stints of years within the caps (tyre age at the stint's end)."""
+    s = stints[stints['Year'].isin(years) & stints['Compound'].isin(st.COMPOUNDS)]
+    s = s[[(y, r) not in wet for y, r in zip(s['Year'], s['Round'])]].merge(events[['Year', 'Round', 'Circuit']], on=['Year', 'Round'])
+    end = s['TyreLifeStart'].fillna(1.0) + s['Laps'] - 1
+    cap = [st.caps_for(caps, c)[k] for c, k in zip(s['Circuit'], s['Compound'])]
+    return float((end <= np.array(cap)).mean())

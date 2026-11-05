@@ -149,6 +149,9 @@ simulator:   # inputs for the strategy simulator (single car, dry, no safety car
     coarse_draws: 50
     refine_draws: 400
     seed: 0
+    stint_cap:   # longest stint per circuit and compound the search allows (strategy.stint_caps)
+      quantile: 0.95               # of tyre age at the stint's end, training seasons, dry races
+      shrink: 20                   # pulled toward the compound's all circuit cap, in stints
 
 pit_decision:   # rival pit stops for the simulator (pitdecision.py): pit or not at the end of each lap, then which tyre
   # v1: dry races, green flag laps, tyre change stops only. Safety cars and gap/position features come in v2.

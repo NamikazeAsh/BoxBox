@@ -118,3 +118,20 @@ def test_threshold_reproduces_each_circuits_pass_rate():
     rate = pd.Series(m.predict(p)).groupby(p['Circuit']).mean()
     real = p.groupby('Circuit')['Pass'].mean()
     assert np.allclose(rate, real, atol=0.002) and m.threshold('Monaco') > m.threshold('Monza')
+
+
+def test_stint_caps_shrink_toward_the_compound_cap_and_bound_the_search():
+    cfg = {'simulator': {**CFG['simulator'], 'race': {**CFG['simulator']['race'], 'stint_cap': {'quantile': 1.0, 'shrink': 10}}}}
+    rows = [('Monza', 'SOFT', 10)] * 10 + [('Spa', 'SOFT', 30)] * 30 + [('Monza', 'HARD', 25)] * 10
+    stints = pd.DataFrame([{'Year': 2024, 'Round': 1 if c == 'Monza' else 2, 'Driver': f'D{i}', 'Stint': 1.0, 'Compound': k,
+                            'StartLap': 1, 'Laps': n, 'TyreLifeStart': 1.0} for i, (c, k, n) in enumerate(rows)])
+    events = pd.DataFrame({'Year': 2024, 'Round': [1, 2], 'Circuit': ['Monza', 'Spa']})
+    caps = st.stint_caps(stints, events, set(), [2024], cfg)
+    monza = st.caps_for(caps, 'Monza')
+    assert np.isclose(monza['SOFT'], (10 * 10 + 10 * 30) / 20)     # 10 stints at 10 laps, pulled toward 30
+    assert st.caps_for(caps, 'Baku')['SOFT'] == 30                   # a new circuit gets the all circuit cap
+    out = st.legal_strategies(40, cfg, caps=monza)
+    for comps, stops in out:
+        ends = np.diff((0,) + stops + (40,))
+        assert all(e <= monza[k] for e, k in zip(ends, comps))
+    assert len(out) < len(st.legal_strategies(40, cfg))

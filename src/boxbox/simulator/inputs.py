@@ -9,7 +9,8 @@ from boxbox import overtaking as ot
 from boxbox.pitloss import PitLoss
 from boxbox.simulator import pace as pc
 from boxbox.simulator.laptime import LapModel
-from boxbox.simulator.strategy import CODE
+from boxbox import features
+from boxbox.simulator.strategy import CODE, stint_caps
 
 RACE = ['Year', 'Round']
 
@@ -39,7 +40,7 @@ class SimInputs:
         self._cfg = cfg
 
     def fit(self, t, pre, years, rule_factory, pace_factory):
-        """t: the processed tables (laps, events, pit_loss_stops). pre: pitdecision.pre_race rows. years: the
+        """t: the processed tables (laps, events, pit_loss_stops, stints). pre: pitdecision.pre_race rows. years: the
         training seasons. rule_factory, pace_factory: the chosen passing rule and pace model (make one)."""
         cfg = self._cfg
         laps = t['laps']
@@ -60,6 +61,7 @@ class SimInputs:
         self.refs = pc.reference_times(targets)
         rl = laps[laps['Year'].isin(years)].groupby(RACE + ['Circuit'])['LapNumber'].max().reset_index()
         self.race_laps = rl.sort_values('Year').groupby('Circuit')['LapNumber'].last()
+        self.caps = stint_caps(t['stints'], t['events'], features.wet_races(laps), years, cfg)
         self._cfg = None
         return self
 
