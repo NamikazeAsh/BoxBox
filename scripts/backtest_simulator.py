@@ -106,19 +106,22 @@ for inputs, policy, year in spots:
                 except (IndexError, ValueError):
                     continue
                 me = best[best['Extra']].iloc[0]
+                real_tier = me['Tier']
                 top = best.iloc[0]
                 checks.append({'Year': year, 'Round': race.Round, 'Circuit': race.Circuit, 'Driver': driver, 'Caps': caps,
                                'Real': '-'.join(c[0] for c in actual[0]) + ' ' + ','.join(map(str, actual[1])),
                                'Best': top['Compounds'] + ' ' + top['StopLaps'], 'RealRank': int(best.index[best['Extra']][0]) + 1,
                                'Raced': len(best), 'RealStops': len(actual[1]), 'BestStops': int(top['Stops']),
-                               'PlaceLoss': me['MeanPlace'] - top['MeanPlace'],
+                               'PlaceLoss': me['MeanPlace'] - top['MeanPlace'], 'RealNearTie': real_tier != 'worse',
+                               'TieGroup': int((best['Tier'] != 'worse').sum()),
                                'BestSoftLaps': top['Compounds'].split('-').count('S')})
 c = pd.DataFrame(checks)
 summary = c.groupby(['Year', 'Caps']).agg(Searches=('Driver', 'size'), RealRankMedian=('RealRank', 'median'),
                                           RealInTop3=('RealRank', lambda x: (x <= 3).mean()),
                                           SameStops=('RealStops', lambda x: (x == c.loc[x.index, 'BestStops']).mean()),
-                                          PlaceLoss=('PlaceLoss', 'mean'), Raced=('Raced', 'median'))
-print('strategy search on real top 3 finishers (RealRank: rank of their real strategy; PlaceLoss: its mean place minus the best\'s)')
+                                          PlaceLoss=('PlaceLoss', 'mean'), Raced=('Raced', 'median'),
+                                          RealNearTie=('RealNearTie', 'mean'), TieGroup=('TieGroup', 'median'))
+print('strategy search on real top 3 finishers (RealRank: rank of their real strategy; PlaceLoss: its mean place minus the best\'s; RealNearTie: it is in the near tie group)')
 print(summary.round(3).to_string(), '\n')
 print('best stop count vs real, with caps'); print(pd.crosstab(c.loc[c['Caps'], 'RealStops'], c.loc[c['Caps'], 'BestStops']).to_string(), '\n')
 m = c[(c['Circuit'] == 'Monza')]

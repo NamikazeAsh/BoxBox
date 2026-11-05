@@ -109,11 +109,18 @@ def best_strategies(inputs, circuit, race_laps, drivers, bases, rival_stints, us
                     start_compounds=None, seed=0, extra=(), use_caps=True):
     """Rank every legal strategy for the user's car (a driver in drivers) against the rivals' strategies
     (stints frame, one strategy per draw or one for all). Coarse pass: free air race time of every legal
-    strategy; the refine_top best per stop count and the overall best are raced against the field with the same
-    rival and noise draws (common random numbers). bases: draws x cars. extra: more (compounds, stop laps) to
-    race whatever their coarse rank (e.g. the strategy the car really ran). use_caps: keep stints within the
-    circuit's stint caps (inputs.caps, strategy.stint_caps). Returns one row per raced strategy,
-    best first: stops, compounds, stop laps, the user's mean place, P(win), P(podium), P(points), median time."""
+    strategy; the refine_top best per stop count are raced against the field with the same rival and noise
+    draws (common random numbers). bases: draws x cars. extra: more (compounds, stop laps) to race whatever
+    their coarse rank (e.g. the strategy the car really ran). use_caps: keep stints within the circuit's stint
+    caps (inputs.caps, strategy.stint_caps).
+
+    Returns one row per raced strategy, best (lowest mean place, then time) first: the user's mean place and its
+    10th to 90th percentile, P(win), P(podium), P(points), race time percentiles, and against the best strategy
+    draw by draw: DeltaPlace (mean place difference) with a 95% interval, PBeatsBest (share of draws it
+    finishes ahead of the best's place, ties half) and Tier: 'best', 'near tie' (within
+    simulator.race.tie_places of the best, or not clearly worse: the interval reaches 0) or 'worse'. The draws
+    cover lap noise, wear slope noise, car pace and rival strategies, not the error in the fitted compound gaps
+    and wear curves, so near ties are where the model cannot separate strategies."""
     r = cfg['simulator']['race']
     D = bases.shape[0]
     u = list(drivers).index(user)
@@ -124,15 +131,37 @@ def best_strategies(inputs, circuit, race_laps, drivers, bases, rival_stints, us
     keep = pd.concat([c.sort_values('FreeAir_s').groupby('Stops').head(r['refine_top'])['i'],
                       pd.Series(range(len(cand) - len(extra), len(cand)))]).drop_duplicates()
     rivals = rival_stints[rival_stints['Driver'] != user]
-    out = []
+    out, places = [], []
     for i in keep:
         comps, stops = cand[i]
         mine = st.strategy_stints(comps, stops, user, 0, start_age)
         arr = st.to_arrays(pd.concat([rivals, mine if rivals['Draw'].nunique() == 1 else
                                       pd.concat([mine.assign(Draw=d) for d in rivals['Draw'].unique()])]), drivers, D)
         res = simulate(inputs, circuit, race_laps, bases, arr, seed=seed)
-        s = summarise(res, drivers).iloc[u]
-        out.append({'Extra': i >= len(cand) - len(extra), 'Stops': len(stops), 'Compounds': '-'.join(x[0] for x in comps), 'StopLaps': ', '.join(map(str, stops)),
-                    'FreeAir_s': t[i], 'MeanPlace': s['MeanPlace'], 'Win': s['Win'], 'Podium': s['Podium'],
-                    'Points': s['Points'], 'Time_s': s['Time_s']})
-    return pd.DataFrame(out).sort_values(['MeanPlace', 'Time_s']).reset_index(drop=True)
+        P, T = res['Place'][:, u].astype(float), res['Time'][:, u]
+        places.append(P)
+        out.append({'Extra': i >= len(cand) - len(extra), 'Stops': len(stops), 'Compounds': '-'.join(x[0] for x in comps),
+                    'StopLaps': ', '.join(map(str, stops)), 'FreeAir_s': t[i], 'MeanPlace': P.mean(),
+                    'Place10': np.quantile(P, 0.1), 'Place90': np.quantile(P, 0.9), 'Win': (P == 1).mean(),
+                    'Podium': (P <= 3).mean(), 'Points': (P <= 10).mean(), 'Time10_s': np.quantile(T, 0.1),
+                    'Time_s': np.median(T), 'Time90_s': np.quantile(T, 0.9)})
+    out = pd.DataFrame(out)
+    order = out.sort_values(['MeanPlace', 'Time_s']).index
+    out, places = out.loc[order].reset_index(drop=True), [places[j] for j in order]
+    best = places[0]
+    d = np.array([p - best for p in places])                       # strategies x draws, paired
+    se = d.std(axis=1, ddof=1) / np.sqrt(D) if D > 1 else np.zeros(len(d))
+    out['DeltaPlace'] = d.mean(axis=1)
+    out['DeltaLo'], out['DeltaHi'] = out['DeltaPlace'] - 1.96 * se, out['DeltaPlace'] + 1.96 * se
+    out['PBeatsBest'] = (d < 0).mean(axis=1) + 0.5 * (d == 0).mean(axis=1)
+    near = (out['DeltaPlace'] <= r['tie_places']) | (out['DeltaLo'] <= 0)
+    out['Tier'] = np.where(out.index == 0, 'best', np.where(near, 'near tie', 'worse'))
+    return out
+
+
+def tie_summary(best):
+    """The near tie group of a best_strategies table in one line per strategy family (stops and compounds), with
+    the range of stop laps in the group."""
+    g = best[best['Tier'] != 'worse']
+    return g.groupby(['Stops', 'Compounds'], sort=False).agg(Strategies=('StopLaps', 'size'), StopLaps=('StopLaps', lambda x: ' | '.join(x)),
+                                                              MeanPlace=('MeanPlace', 'min'), DeltaPlace=('DeltaPlace', 'max')).reset_index()

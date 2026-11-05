@@ -148,6 +148,7 @@ simulator:   # inputs for the strategy simulator (single car, dry, no safety car
     refine_top: 10                 # strategies rescored with refine_draws after the coarse pass
     coarse_draws: 50
     refine_draws: 400
+    tie_places: 0.25               # strategies within this mean place of the best (or not clearly worse) are near ties
     seed: 0
     stint_cap:   # longest stint per circuit and compound the search allows (strategy.stint_caps)
       quantile: 0.95               # of tyre age at the stint's end, training seasons, dry races

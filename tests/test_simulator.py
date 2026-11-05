@@ -135,3 +135,19 @@ def test_stint_caps_shrink_toward_the_compound_cap_and_bound_the_search():
         ends = np.diff((0,) + stops + (40,))
         assert all(e <= monza[k] for e, k in zip(ends, comps))
     assert len(out) < len(st.legal_strategies(40, cfg))
+
+
+def test_search_groups_near_ties_and_flags_clearly_worse_strategies(monkeypatch):
+    cfg = {'simulator': {**CFG['simulator'], 'race': {**CFG['simulator']['race'], 'tie_places': 0.25}}}
+
+    def fake(inputs, circuit, race_laps, bases, arr, rule=None, seed=0):
+        stops = np.isfinite(arr['Stop'][:, 1]).sum(axis=1)               # the user's car is the second
+        place = np.where(stops == 1, 1, 3)
+        return {'Time': np.zeros(bases.shape), 'Place': np.stack([np.full(len(place), 2), place], axis=1)}
+    monkeypatch.setattr(rc, 'simulate', fake)
+    rivals = one_stop('A')
+    best = rc.best_strategies(StubInputs(), 'Monza', 30, ['A', 'B'], np.full((20, 2), 80.0), rivals, 'B', cfg)
+    one, two = best[best['Stops'] == 1], best[best['Stops'] == 2]
+    assert best.loc[0, 'Tier'] == 'best' and (one['Tier'] != 'worse').all() and (one['DeltaPlace'] == 0).all()
+    assert (two['Tier'] == 'worse').all() and np.allclose(two['DeltaPlace'], 2) and (two['PBeatsBest'] == 0).all()
+    assert (rc.tie_summary(best)['Stops'] == 1).all()
