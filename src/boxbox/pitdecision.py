@@ -596,6 +596,22 @@ class PlanPolicy(RivalPolicy):
         return np.where(force, 1.0, p)
 
 
+def fit_plan_policy(laps, pre, results, stops, years, cfg):
+    """The chosen PlanPolicy (pit_decision.chosen: timing and plan model names) fitted on years, as
+    scripts/train_pit_decision.py fits the final one. For simulator folds and backtests."""
+    c = cfg['pit_decision']
+    starts = race_starts(laps, pre, results, years, cfg, green_only=False)
+    rows = pit_laps(laps, pre, cfg)
+    rows = rows[rows['Year'].isin(years)].merge(starts[DRIVER_RACE + ['Plan']], on=DRIVER_RACE).reset_index(drop=True)
+    ctx = Context(cfg).fit(laps, stops, years, laps['Circuit'].unique())
+    full = timing_rows(add_features(rows, ctx))
+    ftr, _, cs = plan_data(starts, starts.head(0), ctx, years, c['plan']['circuit_shrink'])
+    hazard = timing_candidates(cfg)[c['chosen']['timing']]().fit(full)
+    plan = plan_candidates(cfg)[c['chosen']['plan']]().fit(ftr)
+    tyre = TyreChoice(c['tyre_C'], c['force_new_compound_laps_left'], TYRE_FEATURES + ['StopsLeft']).fit(full)
+    return PlanPolicy(plan, cs, hazard, tyre, ctx, cfg)
+
+
 # Evaluation
 
 def lap_metrics(d, p):
@@ -681,14 +697,16 @@ def race_starts(laps, pre, results, years, cfg, green_only=None):
     return s.reset_index(drop=True)
 
 
-def replay(policy, starts, draws=200, seed=0):
+def replay(policy, starts, draws=200, seed=0, record=False):
     """Simulate every start's tyre stops through the race with the policy, draws times each: start on the real
     first tyre (a PlanPolicy first draws the car's plan), pit each lap with the policy's chance, fit the policy's tyre. One row per draw and driver with
-    SimStops and SimFirst (lap of the first stop, NaN if none). Ignores everything but the car's own state (v1)."""
+    SimStops and SimFirst (lap of the first stop, NaN if none). Ignores everything but the car's own state (v1).
+    record=True also returns every stop (Draw, Driver, Lap, Compound fitted), for simulator.strategy.model_stints."""
     s = start_state(starts.loc[starts.index.repeat(draws)].reset_index(drop=True))
     s['Draw'] = np.tile(np.arange(draws), len(starts))
     s['FreshTyre'], s['SimStops'], s['SimFirst'] = s['FreshTyre'].astype(bool), 0, np.nan
     rng = np.random.default_rng(seed)
+    events = []
     if isinstance(policy, PlanPolicy):   # oracle=True keeps the starts' real Plan
         s['Plan'] = s['Plan'] if policy.oracle else policy.sample_plan(s, rng)
     else:
@@ -703,6 +721,9 @@ def replay(policy, starts, draws=200, seed=0):
             if stop.any():
                 idx = st.index[stop]
                 new = policy.choose_tyre(st[stop], rng, d[stop])
+                if record:
+                    events.append(pd.DataFrame({'Draw': s.loc[idx, 'Draw'].to_numpy(), 'Driver': s.loc[idx, 'Driver'].to_numpy(),
+                                                'Lap': float(lap), 'Compound': new}))
                 s.loc[idx, 'Compound'], s.loc[idx, 'TyreLife'], s.loc[idx, 'FreshTyre'] = new, 0.0, True
                 s.loc[idx, 'Stint'] += 1
                 s.loc[idx, 'SimStops'] += 1
@@ -710,7 +731,11 @@ def replay(policy, starts, draws=200, seed=0):
                 for comp, col in USED.items():
                     s.loc[idx, col] = s.loc[idx, col] | (new == comp)
         s['TyreLife'] += 1
-    return s[DRIVER_RACE + ['Draw', 'SimStops', 'SimFirst'] + (['Plan'] if 'Plan' in s else [])]
+    out = s[DRIVER_RACE + ['Draw', 'SimStops', 'SimFirst'] + (['Plan'] if 'Plan' in s else [])]
+    if record:
+        cols = ['Draw', 'Driver', 'Lap', 'Compound']
+        return out, (pd.concat(events, ignore_index=True) if events else pd.DataFrame(columns=cols))
+    return out
 
 
 def replay_metrics(sim, starts):

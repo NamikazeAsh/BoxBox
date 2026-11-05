@@ -132,6 +132,23 @@ simulator:   # inputs for the strategy simulator (single car, dry, no safety car
     recent: null                   # all seasons: last 2 was 0.04 s better on validation, within noise (D16)
     min_stops: 10                  # fewer recent stops than this: use all the circuit's seasons
     target_min_stops: 5            # races scored in the pit loss test need this many stops
+  pace:   # each car's base pace, % behind the race's fastest base, from pre race features (simulator/pace.py)
+    ridge_alpha: [0.1, 1, 10, 100]
+    chosen: 'ridge, alpha 100'     # scripts/train_simulator.py, validation MAE 0.436 % (QualiGap only 0.520) 2026-11-05
+  overtaking:   # rule based passing (overtaking.py): delta - beta x gap > circuit threshold
+    window_s: 1.0                  # a car this close at the line can attempt a pass on the next lap
+    beta: [0.0, 0.5, 1.0]          # seconds of pace advantage needed per second of gap
+    shrink: [0, 50, 100, 200, 400, 800]   # circuit pass rate pulled toward the all circuit rate, in pairs
+    chosen: 'circuit threshold, k 0, beta 1.0'   # validation passes per race MAE 10.0 (global 10.3, free 19.2); 2025 9.8 (global 15.6)
+  race:   # the engine and the strategy search (simulator/race.py)
+    draws: 200                     # Monte Carlo runs per race
+    stop_lap_step: 2               # user car candidate stop laps every this many laps
+    min_stint_laps: 5
+    max_stops: 3
+    refine_top: 10                 # strategies rescored with refine_draws after the coarse pass
+    coarse_draws: 50
+    refine_draws: 400
+    seed: 0
 
 pit_decision:   # rival pit stops for the simulator (pitdecision.py): pit or not at the end of each lap, then which tyre
   # v1: dry races, green flag laps, tyre change stops only. Safety cars and gap/position features come in v2.
@@ -152,6 +169,9 @@ pit_decision:   # rival pit stops for the simulator (pitdecision.py): pit or not
     decay: [1.0, 0.5, 0.25]        # season weight decay ** (seasons before the latest); stops fall every season
     neutral_scale: 10              # SC, VSC, red flag flags scaled after standardising: 100x weaker penalty
     circuit_shrink: 40             # circuit mean stops pulled toward the overall mean, in drivers
+  chosen:   # picked by scripts/train_pit_decision.py on validation (2026-11-05); fit_plan_policy uses these
+    timing: 'timing logit, C 0.01'
+    plan: 'plan logit, C 0.01, decay 0.25, flags x10'
   tyre_C: 1.0                      # tyre choice multinomial logit
   force_new_compound_laps_left: 20 # one compound used so far and fewer laps left than this: the next tyre must differ
   force_stop_laps_left: 3          # replay: two compound rule unmet with this many laps left forces a stop
