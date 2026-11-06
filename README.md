@@ -21,6 +21,7 @@ Trained on earlier seasons, tested on 2025:
 
 * **Tyre degradation:** predicts each lap within 0.66 s on average, against 0.76 s with no wear model (0.65 s averaged with the Bayesian model). Wear is close to linear in tyre age, and running 1 to 1.5 s behind another car costs about 0.26 s a lap.
 * **Finishing position:** 2.35 places average error, against 2.46 for grid order.
+* **Strategy simulator (v1):** with each car's real pace and real strategy, it replays green flag dry races to within 1.27 places per driver, against 2.05 for grid order. With everything predicted before the race (car pace and rival strategies), the error is 2.44, behind both the grid and the finishing position predictor (2.18) on these races. Its overtaking rule reproduces each circuit's pass rate.
 * **Key finding:** how fast tyres wear changes from race to race in ways nothing before the race predicts.
 
 ## Dashboard
@@ -61,7 +62,12 @@ Derived quantities (one definition each, in `src/boxbox/features.py`):
 ## Approach
 
 1. **Tyre degradation.** Lap time is a stint's own pace level plus a wear rate times tyre age. The level comes from each stint's first laps, so the wear rate is learned only from how lap times change within a stint, not from comparing fast and slow cars. Wear rates are estimated per circuit and compound and blended toward the compound average where history is thin. Compared against a quadratic and a smooth (GAM) wear curve, LightGBM, and a hierarchical Bayesian model (NumPyro) that learns how much circuits, races, teams and stints differ. Conformal intervals give every model a calibrated spread.
-2. **Strategy simulation (next).** Total race time for each legal pit strategy from the degradation model, pit loss per circuit and sampled lap noise, with Monte Carlo for safety cars; later a full field version with a learned overtaking model, following Heilmeier et al. [4, 5].
+2. **Strategy simulation.** A lap by lap Monte Carlo race of the whole field, following Heilmeier et al. [4, 5]. Version 1 covers dry, green flag races with no retirements.
+   * **Lap times:** each car's free air lap is its base pace plus fuel, the compound gap, tyre wear, track evolution, a race start offset and lap noise. Running 1 to 3 s behind another car adds the dirty air cost, and each stop adds a pit loss drawn for the circuit.
+   * **Car pace:** ridge regression on qualifying gap and recent team and driver form, with each car's pace drawn from the model's error so rivals are not known exactly.
+   * **Rival strategies:** fixed before the race. They are either the real ones (for backtests) or drawn from a pit decision model, which picks a plan (1, 2 or 3+ stops), times the stops lap by lap and chooses each new compound under the two compound rule. A user can also set any car's strategy.
+   * **Overtaking:** a rule, not a learned model. A car within 1 s of the car ahead passes if its free air pace advantage, less the gap, beats a threshold for that circuit. The threshold is set so the rule reproduces the circuit's real pass rate (from Monaco's 0.6% of close laps to Barcelona's 25%). Otherwise the car is held about 0.5 s behind.
+   * **Strategy search:** for one driver, every legal strategy is raced against the same rival draws. Stint lengths are capped per circuit and compound at what teams have run. Strategies whose finishing place is within a quarter place of the best are reported as near ties, and each draw uses a tyre model refitted on resampled races, so the spread includes the uncertainty in the tyre inputs.
 3. **Outcome prediction.** Ridge regression ranking each race's classified finishers from information known before the start.
 4. **Distribution shift.** Rehearse the method on the known 2021 to 2022 regulation change, then apply it to 2026: do the degradation curves and the predictor's errors shift, and how quickly can the models adapt?
 5. **Dashboard.** Streamlit app combining the predictor and the simulator.
@@ -71,7 +77,17 @@ Derived quantities (one definition each, in `src/boxbox/features.py`):
 * **Splits:** always by whole race or season. Rolling origin validation (train on the seasons before, score the next), with the last pre 2026 season (2025) as the test season.
 * **Degradation:** per lap error of the anchored forecast above, by forecast horizon and compound; race by race paired bootstrap against the current model; interval coverage and quantile score.
 * **Outcome predictor:** position MAE among classified finishers, Spearman correlation per race, podium and top 10 hit rates, against grid order.
-* **Simulator:** replay historical dry races with the strategies teams actually used and compare simulated and observed race times; compare its recommended strategies with what the top finishers ran.
+* **Simulator:** replay green flag dry races from the real grid and score finishing position MAE among classified finishers, against grid order and the finishing position predictor. Variants separate the engine from its inputs: real or predicted car pace, real or pit model strategies, and the overtaking rule against a single global threshold, free passing and no passing. The strategy search is checked against what the top three finishers ran.
+* **Passing rule and car pace:** chosen on the validation seasons by the error in passes per race and in percent pace.
+
+| Simulator place MAE | 2023 | 2024 | 2025 (test) |
+|---|---|---|---|
+| Real pace, real strategies | 1.59 | 1.33 | 1.27 |
+| Predicted pace, pit model strategies | 2.14 | 1.85 | 2.44 |
+| Finishing position predictor | 2.00 | 1.76 | 2.18 |
+| Grid order | 2.70 | 2.20 | 2.05 |
+
+These are green flag races only, so the predictor and grid numbers differ from the full season ones above.
 * **Distribution shift:** train on 2022 to 2025, test on completed 2026 races.
 
 ## Running it
@@ -89,6 +105,9 @@ Models (`--validation` scores the validation seasons only and leaves the test se
 ```
 python scripts/train_degradation.py [--validation]   # choose and fit the degradation model, write data/models/
 python scripts/train_outcome.py [--validation]       # finishing position predictor
+python scripts/train_pit_decision.py [--validation]  # rival pit model
+python scripts/train_simulator.py [--validation]     # passing rule, car pace and the other simulator inputs
+python scripts/backtest_simulator.py [--validation] [--search]   # replay races; --search checks the strategy search (slow)
 ```
 
 Dashboard (after the models are trained):
@@ -104,6 +123,8 @@ Every threshold, assumption and model option lives in `config.yaml`: seasons per
 
 * `src/boxbox/`: `ingest.py` (pulls), `clean.py` (typed tables), `features.py` (all derived definitions), `pipeline.py`, `checks.py`, `evaluate.py` (season splits), `outcome.py` (finishing position predictor).
 * `src/boxbox/degradation/`: one module per model family on a shared task: `task` (clean laps and the anchored forecast), `linear`, `gam` (quadratic and spline curves), `trees` (LightGBM), `bayes`, `ensemble` (averages), `intervals` (conformal), `adjust` (same weekend and in race updates), `compare`; for the simulator, `monotone` (wear that never falls with age), `compound` (fresh tyre gaps between compounds) and `noise` (lap noise shared by a stint and a race). `src/boxbox/pitloss.py`: pit loss per circuit.
+* `src/boxbox/pitdecision.py`: the rival pit model (stop plan, lap by lap stop timing, tyre choice). `src/boxbox/overtaking.py`: close pairs from real races and the passing rule.
+* `src/boxbox/simulator/`: `laptime` (the lap time model), `pace` (car pace), `strategy` (real, model and user strategies, legal strategies, stint caps), `race` (the race engine and strategy search), `inputs` (everything fitted, saved as one file), `backtest`.
 * `app/`: the Streamlit dashboard (pages in `views/`, shared pieces in `components/`, styling in `theme/`); its tables come from `src/boxbox/dashboard.py`.
 * `scripts/`: entry points only.
 * `tests/`: pytest on small synthetic data.
@@ -117,6 +138,10 @@ Every threshold, assumption and model option lives in `config.yaml`: seasons per
 * The 2025 test season was scored several times while the degradation model was developed, so its numbers are somewhat optimistic; validation seasons drove every choice.
 * The outcome predictor ranks classified finishers only; retirements are not modeled.
 * Wet races are excluded from degradation and pit loss for now.
+* The simulator has no safety cars, retirements, lap 1 position changes or rivals reacting to other cars yet.
+* The strategy search favours Soft stints where teams run Hards (Monza, Austin, Spa): the tyre inputs likely overrate Softs on long stints. The real strategy of a top three finisher is among the search's near ties only 19 to 37% of the time.
+* After the opening laps the simulated field runs bunched up about twice as often as in real races, because held cars stay close behind.
+* Race times with predicted pace run 80 to 140 s slow, since reference times come from the season before; finishing places are not affected.
 
 ## References
 
