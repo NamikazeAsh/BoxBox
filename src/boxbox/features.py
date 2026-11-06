@@ -236,3 +236,24 @@ def long_runs(prac, cfg):
                  TyreLifeStart=('TyreLife', 'min'), Median_s=('LapTime_s', 'median'), TrackTemp=('TrackTemp', 'median'))
     runs['Slope_s_per_lap'] = g[['LapNumber', 'LapTime_s']].apply(slope)
     return runs.reset_index().drop(columns='Stint')
+
+
+def pit_labels(laps, cfg):
+    """Pit decision labels (pit_decision v1). PitStop: the driver pitted at the end of this lap for new tyres
+    (a PitIn lap followed by a new stint). PitRow: the lap is a decision the v1 model learns from: a dry race,
+    green flag, from pit_decision.first_lap, not within neutral_cooldown_laps of a SC, VSC or red flag lap, with
+    a known dry compound and tyre age. A PitIn lap with no next lap (retired in the pits) or with the same stint
+    after it (a drive through or stop and go penalty) is not a decision and is left out. Rows are never dropped."""
+    c = cfg['pit_decision']
+    l = laps.sort_values(RACE + ['Driver', 'LapNumber'])
+    g = l.groupby(RACE + ['Driver'])
+    nxt = g['Stint'].shift(-1)
+    stop = l['PitIn'] & (nxt > l['Stint'])
+    not_stop = l['PitIn'] & ~stop                      # retired in the pits, or a penalty
+    neutral = l['TrackStatus'] != '1'
+    cool = pd.Series(False, index=l.index)
+    for k in range(1, c['neutral_cooldown_laps'] + 1):
+        cool |= neutral.groupby([l['Year'], l['Round'], l['Driver']]).shift(k, fill_value=False)
+    row = (~neutral & ~cool & ~not_stop & (l['LapNumber'] >= c['first_lap']) & ~l['WetRace']
+           & l['Compound'].isin(cfg['clean_lap']['dry_compounds']) & l['TyreLife'].notna() & l['Stint'].notna())
+    return pd.DataFrame({'PitStop': stop, 'PitRow': row}).reindex(laps.index)
