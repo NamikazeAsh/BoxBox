@@ -140,7 +140,7 @@ def test_stint_caps_shrink_toward_the_compound_cap_and_bound_the_search():
 def test_search_groups_near_ties_and_flags_clearly_worse_strategies(monkeypatch):
     cfg = {'simulator': {**CFG['simulator'], 'race': {**CFG['simulator']['race'], 'tie_places': 0.25}}}
 
-    def fake(inputs, circuit, race_laps, bases, arr, rule=None, seed=0):
+    def fake(inputs, circuit, race_laps, bases, arr, rule=None, seed=0, **kw):
         stops = np.isfinite(arr['Stop'][:, 1]).sum(axis=1)               # the user's car is the second
         place = np.where(stops == 1, 1, 3)
         return {'Time': np.zeros(bases.shape), 'Place': np.stack([np.full(len(place), 2), place], axis=1)}
@@ -195,3 +195,146 @@ def test_wear_grid_rows_follow_the_engine_compound_order():
     finally:
         lt.compare.ladder, lt.CompoundPace = orig
     assert np.allclose(grid['Monza'][:, 0], [3.0, 2.0, 1.0])     # Soft, Medium, Hard at age 1
+
+
+class StubNeutral:
+    sc_lap_ratio, vsc_lap_ratio = 1.5, 1.3
+    sc_train_gaps = np.array([1.0])
+    pit_loss_ratio = {1: 0.5, 2: 0.75}
+
+
+def neutral_race(status_laps, code, strategies=None, laps=20, pace=(80.0, 81.0, 82.0)):
+    """A, B and C apart in pace (A fastest), no passing; status code on status_laps."""
+    inputs = StubInputs(threshold=99.0)
+    inputs.neutral = StubNeutral()
+    s = strategies if strategies is not None else pd.concat([one_stop(d) for d in 'ABC'])
+    arr = st.to_arrays(s, list('ABC'), 2)
+    bases = np.array([list(pace)] * 2)
+    status = np.zeros(laps + 1, np.int8)
+    status[list(status_laps)] = code
+    return rc.simulate(inputs, 'Monza', laps, bases, arr, status=status), rc.simulate(inputs, 'Monza', laps, bases, arr)
+
+
+def test_safety_car_closes_the_field_into_a_train_and_vsc_keeps_the_order():
+    sc, green = neutral_race(range(4, 8), 1)
+    gaps = np.diff(np.sort(sc['Time'][0]))
+    assert (sc['Place'] == green['Place']).all()
+    assert gaps.max() < np.diff(np.sort(green['Time'][0])).max()           # the train took the gaps away
+    vsc, _ = neutral_race(range(4, 8), 2)
+    assert (vsc['Place'] == green['Place']).all() and (vsc['Passes'] == 0).all()
+    assert (vsc['Time'] > green['Time']).all()
+
+
+def test_a_stop_under_a_safety_car_costs_less():
+    late = pd.concat([one_stop('A', 6), one_stop('B'), one_stop('C')])
+    far = (80.0, 90.0, 100.0)                                              # far apart: nobody meets anybody
+    under, _ = neutral_race([6], 2, late, pace=far)
+    green, _ = neutral_race([], 2, late, pace=far)
+    # A pits on lap 6: on a VSC lap its stop costs 0.75 x 20 s, and the lap itself is 30% slower for everyone
+    lap = 0.3 * np.array(far)
+    assert np.allclose(under['Time'][0] - green['Time'][0], lap + np.array([-5.0, 0.0, 0.0]))
+
+
+def test_a_planned_stop_moves_onto_an_early_safety_car():
+    arr = st.to_arrays(pd.concat([one_stop('A', 12), one_stop('B', 20)]), ['A', 'B'], 2)
+    status = np.zeros((2, 31), np.int8)
+    status[0, 9:12] = 1                                   # draw 0: a safety car from lap 9; draw 1: green
+    out = rc.react_to_neutral(arr, status, [0, 1], window=5)
+    assert out['Stop'][0, 0, 0] == 9 and out['Stop'][1, 0, 0] == 12      # A was due on 12: pits on 9, only under it
+    assert out['Stop'][0, 1, 0] == 20                                     # B's stop is too far off: stays
+    assert np.isinf(out['Stop'][:, :, 1]).all()
+
+
+def test_the_car_ahead_answers_a_stop_only_when_asked_and_never_the_fixed_car():
+    class WearLap(StubLap):
+        def free_air(self, base, circuit, compound, age, lap, race_laps, rep=None):
+            return np.broadcast_to(base, np.shape(compound)) + 0.3 * np.asarray(age, float)   # stops change race time
+    inputs = StubInputs(threshold=99.0)
+    inputs.lap = WearLap()
+    inputs.engine = {'cover_gap_s': 3.0, 'cover_p': 1.0, 'cover_laps': 10}
+    s = pd.concat([one_stop('A', 12), one_stop('B', 6)])                # B (behind, 0.5 s) pits first
+    arr = st.to_arrays(s, ['A', 'B'], 2)
+    bases = np.array([[80.0, 80.0]] * 2)
+    rc.simulate(inputs, 'Monza', 20, bases, arr, cover=True)
+    assert arr['Stop'][0, 0, 0] == 12                                    # the caller's arrays are not changed
+    moved = rc.simulate(inputs, 'Monza', 20, bases, arr, cover=True, record_pairs=0)
+    still = rc.simulate(inputs, 'Monza', 20, bases, arr, cover=True, fixed_cars=[0])
+    plain = rc.simulate(inputs, 'Monza', 20, bases, arr)
+    assert np.allclose(still['Time'], plain['Time']) and not np.allclose(moved['Time'], plain['Time'])
+
+
+def test_strategies_with_different_stop_counts_race_the_same_noise():
+    class NoisyLap(StubLap):
+        class noise:
+            @staticmethod
+            def draw_slopes(rng, draws, races):
+                return rng.normal(0, 0.05, (draws, len(races)))
+
+            @staticmethod
+            def draw_laps(rng, shape):
+                return rng.normal(0, 0.5, shape)
+    inputs = StubInputs(threshold=99.0)
+    inputs.lap = NoisyLap()
+    bases = np.array([[80.0, 85.0]] * 4)
+    one = st.to_arrays(pd.concat([one_stop('A'), one_stop('B')]), ['A', 'B'], 4)
+    two = st.to_arrays(pd.concat([st.strategy_stints(('MEDIUM', 'HARD', 'MEDIUM'), (6, 12), 'A'), one_stop('B')]), ['A', 'B'], 4)
+    r1, r2 = rc.simulate(inputs, 'Monza', 20, bases, one, seed=3), rc.simulate(inputs, 'Monza', 20, bases, two, seed=3)
+    assert np.allclose(r1['Time'][:, 1], r2['Time'][:, 1])     # B ran the same race in both (it never meets A)
+
+
+def test_a_pit_lane_pass_on_the_same_tyre_is_not_a_stop():
+    stints = pd.DataFrame({'Year': 2024, 'Round': 1, 'Driver': 'A', 'Stint': [1.0, 2.0, 3.0], 'Compound': ['MEDIUM', 'MEDIUM', 'HARD'],
+                           'StartLap': [1, 11, 21], 'Laps': [10, 10, 20], 'TyreLifeStart': [1.0, 11.0, 1.0]})
+    s = st.real_stints(stints, 2024, 1)
+    assert s['Compound'].tolist() == ['MEDIUM', 'HARD'] and s['StartLap'].tolist() == [1, 21]
+
+
+def test_paired_comparison_finds_the_better_variant():
+    from boxbox.simulator import backtest as bt
+    rows = []
+    for rnd in range(1, 9):
+        for d, fin in enumerate([1, 2, 3, 4]):
+            rows.append({'Year': 2024, 'Round': rnd, 'Driver': f'D{d}', 'Finish': fin, 'Grid': fin, 'Variant': 'good', 'MeanPlace': fin})
+            rows.append({'Year': 2024, 'Round': rnd, 'Driver': f'D{d}', 'Finish': fin, 'Grid': fin, 'Variant': 'bad', 'MeanPlace': 5 - fin})
+    out = bt.paired(pd.DataFrame(rows), 'bad', ['good'])
+    assert out.loc['good', 'Change'] == -2.0 and out.loc['good', 'Hi'] < 0 and out.loc['good', 'Better'] == 8
+
+
+def test_red_flag_stops_are_free_and_double_stacks_cost_the_second_car():
+    late = pd.concat([one_stop('A', 6), one_stop('B'), one_stop('C')])
+    far = (80.0, 90.0, 100.0)
+    inputs = StubInputs(threshold=99.0)
+    inputs.neutral = StubNeutral()
+    inputs.engine = {'red_flag_free': True}
+    arr = st.to_arrays(late, list('ABC'), 2)
+    bases = np.array([list(far)] * 2)
+    free = np.zeros(21, bool)
+    free[6] = True
+    paid = rc.simulate(inputs, 'Monza', 20, bases, arr)
+    gratis = rc.simulate(inputs, 'Monza', 20, bases, arr, free=free)
+    assert np.allclose(paid['Time'][:, 0] - gratis['Time'][:, 0], 20.0)        # A's stop on a red flag lap is free
+    stop = np.array([[True, True, False]])
+    extra = rc.stack_cost(stop, np.array([[10.0, 12.0, 30.0]]), np.array([0, 0, 1]), {0: 0.6, 1: 2.1, 2: 3.2}, np.array([1]))
+    assert np.allclose(extra, [[0.0, 2.1, 0.0]])                                # the car behind waits
+
+
+def test_the_train_lines_up_at_the_restart_gaps():
+    class Tight(StubNeutral):
+        sc_train_gaps, sc_restart_gaps = np.array([1.0]), np.array([0.2])
+    inputs = StubInputs(threshold=99.0)
+    inputs.neutral = Tight()
+    inputs.engine = {'sc_restart': 'measured'}
+    arr = st.to_arrays(pd.concat([one_stop(d, 15) for d in 'ABC']), list('ABC'), 2)
+    status = np.zeros(21, np.int8)
+    status[4:8] = 1                                                             # last safety car lap is 7
+    r = rc.simulate(inputs, 'Monza', 7, np.array([[80.0, 81.0, 82.0]] * 2), arr, status=status[:8])
+    assert np.allclose(np.diff(np.sort(r['Time'][0])), 0.2)
+
+
+def test_a_race_started_from_a_state_carries_on_from_it():
+    arr = st.to_arrays(pd.concat([one_stop('A', 15), one_stop('B', 11)]), ['A', 'B'], 2)
+    state = {'lap': 10, 'T': np.array([1000.0, 1003.0]), 'k': np.array([0, 0]), 'age': np.array([11.0, 11.0]),
+             'out': np.array([False, False])}
+    r = rc.simulate(StubInputs(threshold=99.0), 'Monza', 20, np.array([[80.0, 80.0]] * 2), arr, start=state, last_lap=12)
+    assert np.allclose(r['Time'][:, 0], 1000.0 + 2 * 80.0)               # laps 11 and 12 at base pace
+    assert np.allclose(r['Time'][:, 1], 1003.0 + 2 * 80.0 + 20.0)        # B pits at the end of lap 11

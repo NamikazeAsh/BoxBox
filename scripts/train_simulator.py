@@ -1,5 +1,6 @@
-"""Choose and evaluate the simulator's passing rule and car pace model, then fit every simulator input on all
-seasons (simulator/inputs.py).
+"""Evaluate the simulator's passing rule and car pace model, then fit every simulator input on all seasons
+(simulator/inputs.py). v2: the rule and the pace model are the config's choices, made in the race level studies;
+this script reports their pair level and pace scores on validation and test and writes the final fit.
 
     python scripts/train_simulator.py [--validation]
 
@@ -25,7 +26,7 @@ seasons = seasons_for(cfg, 'overtaking')
 P = cfg['paths']['processed']
 t = {n: pd.read_parquet(P / f'{n}.parquet') for n in ['laps', 'results', 'qualifying', 'sprint_results', 'events', 'pit_loss_stops', 'stints']}
 laps = t['laps']
-pre = pdm.pre_race(t['results'], t['qualifying'], t['sprint_results'], t['events'], laps, cfg)
+pre = pc.pre_race(t['results'], t['qualifying'], t['sprint_results'], t['events'], laps, cfg)
 split = evaluate.season_splits(seasons)
 validation_only = '--validation' in sys.argv
 pd.set_option('display.width', 250)
@@ -68,11 +69,15 @@ val = {year: fold(train, year) for train, year in split['validation']}
 rt, pt, extra = score(val, list(rules), list(paces))
 print('passing rule, validation (close pairs, B within window_s at the line)')
 print(rt.sort_values('Race MAE, passes').round(3).to_string(), '\n')
-best_rule = rt.drop([ot.FreePassing.name, ot.NoPassing.name]).sort_values('Race MAE, passes').index[0]
-print(f'chosen rule: {best_rule}\n')
+# v2: the rule and the pace model are the config's choices (simulator.overtaking.chosen, simulator.pace.chosen), made in
+# the race level studies (scripts/tune_simulator_engine.py, tune_pass_calibration.py, notes/simulator_v2.md); the pair
+# level table is reported, not used to pick (the pass logits win on pairs and lose in the engine, D17)
+best_rule = cfg['simulator']['overtaking']['chosen']
+print('pair level best (not used to choose):', rt.drop([ot.FreePassing.name, ot.NoPassing.name]).sort_values('Race MAE, passes').index[0])
+print(f'chosen rule (config): {best_rule}\n')
 print('car pace, validation (% behind the race median base)'); print(pt.sort_values('MAE, %').round(4).to_string(), '\n')
-best_pace = pt.drop(pc.ConstantPace.name).sort_values('MAE, %').index[0]
-print(f'chosen pace: {best_pace}\n')
+best_pace = cfg['simulator']['pace']['chosen']
+print('lowest validation MAE:', pt.drop(pc.ConstantPace.name).sort_values('MAE, %').index[0], f'| chosen pace (config): {best_pace}\n')
 print('other inputs by fold'); print(extra.round(3).to_string(), '\n')
 if validation_only:
     sys.exit()
@@ -80,7 +85,7 @@ if validation_only:
 train, year = split['test']
 glob = next(n for n in rules if n.startswith('global threshold') and n.endswith(best_rule.split(', ')[-1]))
 rt, pt, extra = score({year: fold(train, year)}, list(dict.fromkeys([ot.FreePassing.name, ot.NoPassing.name, glob, best_rule])),
-                      [pc.ConstantPace.name, 'ridge, alpha 10, QualiGap', best_pace])
+                      list(dict.fromkeys([pc.ConstantPace.name, 'ridge, alpha 10, QualiGap', cfg['simulator']['backtest']['v1_pace'], best_pace])))
 print(f'test: train {train[0]} to {train[-1]}, score {year}')
 print('passing rule, test'); print(rt.round(3).to_string(), '\n')
 print('car pace, test'); print(pt.round(4).to_string(), '\n')

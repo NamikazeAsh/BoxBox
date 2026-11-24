@@ -3,11 +3,15 @@
 optimises over stint length would exploit that. MonotoneWear wraps any wear model: the age part of its wear is
 replaced by its running maximum over ages 1 to max_age per circuit and compound, and the lap level offsets
 (race start, dirty air) are left as they are.
+
+order_compounds is the same idea across compounds on the simulator's wear grid (off by default).
 """
 import numpy as np
 import pandas as pd
 
-from boxbox.degradation.task import KEY
+from boxbox.degradation.task import COMPOUNDS, KEY
+
+KEY_INDEX = {k: i for i, k in enumerate(COMPOUNDS)}
 
 
 class MonotoneWear:
@@ -41,3 +45,16 @@ class MonotoneWear:
 
     def dirty_air(self, laps):
         return self.base.dirty_air(laps)
+
+
+def order_compounds(grid):
+    """Wear that never favours a softer compound: on a wear grid (circuits x compounds x ages, compounds in
+    task.COMPOUNDS order, Soft first) the Medium's wear is raised to at least the Hard's and the Soft's to at least
+    the Medium's, age by age. A circuit where few Softs were run can fit a Soft that wears less than its Medium
+    (Spa); a softer tyre wearing less is not physical, and the search would use it. Off by default
+    (simulator.compound_pace.compound_order)."""
+    w = np.array(grid, dtype=float, copy=True)
+    hard, medium, soft = (KEY_INDEX[k] for k in ('HARD', 'MEDIUM', 'SOFT'))
+    w[..., medium, :] = np.maximum(w[..., medium, :], w[..., hard, :])
+    w[..., soft, :] = np.maximum(w[..., soft, :], w[..., medium, :])
+    return w

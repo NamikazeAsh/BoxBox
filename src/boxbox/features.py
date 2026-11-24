@@ -100,6 +100,27 @@ def add_clean_flags(laps, cfg):
     return laps
 
 
+def wet_clean(laps, cfg):
+    """Clean laps on wet tyres (wet.compounds), the wet race study's IsClean (wet.py). The dry definition's steps
+    (add_clean_flags: valid, not lap 1, not an in or out lap, green, not in traffic) on intermediates or wets, and
+    no slower than wet.outlier_pct times the driver's median lap in the same stint (not the race: a drying or
+    wetting track moves wet tyre pace by several seconds within a race, so a race median would drop real laps)."""
+    w, c = cfg['wet'], cfg['clean_lap']
+    base = (laps['LapTime_s'].notna() & (laps['LapNumber'] > 1) & ~laps['PitIn'].astype(bool)
+            & ~laps['PitOut'].astype(bool) & (laps['TrackStatus'] == '1') & laps['Compound'].isin(w['compounds'])
+            & ~(laps['GapAhead_s'] < c['traffic_gap_s']))
+    med = laps['LapTime_s'].where(base).groupby([laps[k] for k in RACE + ['Driver', 'Stint']]).transform('median')
+    return base & ~(laps['LapTime_s'] > w['outlier_pct'] * med)
+
+
+def tyre_group(compound, cfg):
+    """'slick' for a dry compound, 'wet' for an intermediate or wet (wet.crossover.wet_group), else NaN."""
+    g = pd.Series(np.nan, index=compound.index, dtype=object)
+    g[compound.isin(cfg['clean_lap']['dry_compounds'])] = 'slick'
+    g[compound.isin(cfg['wet']['crossover']['wet_group'])] = 'wet'
+    return g
+
+
 def race_conditions(laps, prac):
     """Weather per race: median track and air temperature, humidity and wind over the race laps, the track
     temperature spread during the race (90th minus 10th percentile), and whether the weekend's practice
@@ -243,12 +264,18 @@ def pit_labels(laps, cfg):
     (a PitIn lap followed by a new stint). PitRow: the lap is a decision the v1 model learns from: a dry race,
     green flag, from pit_decision.first_lap, not within neutral_cooldown_laps of a SC, VSC or red flag lap, with
     a known dry compound and tyre age. A PitIn lap with no next lap (retired in the pits) or with the same stint
-    after it (a drive through or stop and go penalty) is not a decision and is left out. Rows are never dropped."""
+    after it (a drive through or stop and go penalty) is not a decision and is left out. With
+    pit_decision.tyre_change_only (v2), a new stint on the same tyre (same compound, one lap older: the field led
+    through the pit lane under a safety car, Canada 2025, Qatar 2024 and others) is not a stop either: 182 of 2,798
+    such stints in the dry races of 2022 to 2025 (notes/sim_v2_sc_pit.md). Rows are never dropped."""
     c = cfg['pit_decision']
     l = laps.sort_values(RACE + ['Driver', 'LapNumber'])
     g = l.groupby(RACE + ['Driver'])
     nxt = g['Stint'].shift(-1)
     stop = l['PitIn'] & (nxt > l['Stint'])
+    if c.get('tyre_change_only', False):
+        same = (g['Compound'].shift(-1) == l['Compound']) & (g['TyreLife'].shift(-1) == l['TyreLife'] + 1)
+        stop = stop & ~same
     not_stop = l['PitIn'] & ~stop                      # retired in the pits, or a penalty
     neutral = l['TrackStatus'] != '1'
     cool = pd.Series(False, index=l.index)
@@ -257,3 +284,80 @@ def pit_labels(laps, cfg):
     row = (~neutral & ~cool & ~not_stop & (l['LapNumber'] >= c['first_lap']) & ~l['WetRace']
            & l['Compound'].isin(cfg['clean_lap']['dry_compounds']) & l['TyreLife'].notna() & l['Stint'].notna())
     return pd.DataFrame({'PitStop': stop, 'PitRow': row}).reindex(laps.index)
+
+
+NEUTRAL_CODES = {'green': 0, 'safety car': 1, 'virtual safety car': 2}   # the simulator's per lap status codes
+
+
+def neutral_laps(laps, share=0.75):
+    """Per race lap, how the field ran it (simulator v2): Neutral 1 for a safety car lap (track status 4, or a red
+    flag 5, folded in with the safety car), 2 for a virtual safety car lap (6 or 7), else 0. Each car's status
+    string lists every status it saw on its lap, and a lap number is coded when at least `share` of the cars that
+    ran it saw the status (config neutral.lap_share); a lap where share of them saw some neutral status but
+    neither kind alone reaches it takes the more common kind. share=0 is the first rule (any car), which also
+    coded the lap before a deployment whenever a backmarker was still on it, and partly green laps: 137 of its 675
+    neutral laps (dry races 2019 to 2025) had a field median lap within 5% of green pace, against 38 of 568 at
+    share 0.5 and 17 of 530 at 0.75 (notes/sim_v2_neutral.md).
+    The simulator's status arrays use the same codes (draws x race laps + 1, index = lap number, 0 unused)."""
+    st = laps['TrackStatus'].fillna('').astype(str)
+    key = [laps[c] for c in RACE] + [laps['LapNumber']]
+    sc = st.str.contains('[45]').groupby(key).mean()
+    vsc = st.str.contains('[67]').groupby(key).mean()
+    either = st.str.contains('[4-7]').groupby(key).mean()
+    on = lambda x: ((x >= share) & (x > 0)).to_numpy()
+    code = np.where(on(sc), 1, np.where(on(vsc), 2, np.where(on(either), np.where(sc >= vsc, 1, 2), 0))).astype(np.int8)
+    return pd.DataFrame({'Neutral': code}, index=sc.index).reset_index()
+
+
+# Reference tables (data/reference, loaded by reference.py): derived quantities
+
+def compound_index(year, c_number, cfg):
+    """Pirelli C number on a scale comparable across the seasons of one tyre family: reference.c_rename maps a
+    season's number to the later name of the same compound (2022's C1 became C0 in 2023, when a new C1 was added
+    between it and C2; C6 was added in 2025). NaN outside reference.tyre_eras, and a season's index is only
+    comparable with seasons of the same era (2026 is a new, narrower tyre family; modelling D1)."""
+    r = cfg['reference']
+    year, c = pd.Series(year).reset_index(drop=True), pd.Series(c_number, dtype=float).reset_index(drop=True)
+    out = c.copy()
+    for y, m in (r.get('c_rename') or {}).items():
+        at = year == int(y)
+        out[at] = c[at].replace({float(k): float(v) for k, v in m.items()})
+    in_era = pd.Series(False, index=year.index)
+    for lo, hi in r['tyre_eras']:
+        in_era |= year.between(lo, hi)
+    return out.where(in_era).to_numpy(float)
+
+
+def tyre_era(year, cfg):
+    """Index of the reference.tyre_eras entry a season belongs to (-1 if none)."""
+    year = pd.Series(year)
+    era = pd.Series(-1, index=year.index)
+    for i, (lo, hi) in enumerate(cfg['reference']['tyre_eras']):
+        era[year.between(lo, hi)] = i
+    return era.to_numpy()
+
+
+def allocation_change(long, cfg, history_years, years):
+    """Per race of `years` and compound label (reference.compounds_long rows): CIndex (compound_index of the
+    nominated compound), HistIndex (mean CIndex over the circuit's races in history_years with that label, same
+    tyre era only) and DeltaC = CIndex - HistIndex (positive: a softer compound behind the label than in the
+    circuit's history). NaN where the circuit has no history in the era."""
+    d = long.assign(CIndex=compound_index(long['Year'], long['CNumber'], cfg), Era=tyre_era(long['Year'], cfg))
+    hist = d[d['Year'].isin(history_years)].groupby(['Circuit', 'Compound', 'Era'])['CIndex'].mean().rename('HistIndex')
+    out = d[d['Year'].isin(years)].join(hist, on=['Circuit', 'Compound', 'Era'])
+    return out.assign(DeltaC=out['CIndex'] - out['HistIndex']).drop(columns='Era').reset_index(drop=True)
+
+
+def rating_change(circuits, cols, history_years, years):
+    """Per race of `years` (reference.load_circuits rows): each column in cols less its mean over the circuit's
+    races in history_years, as Delta<col> (NaN with no history or no rating)."""
+    hist = circuits[circuits['Year'].isin(history_years)].groupby('Circuit')[cols].mean()
+    cur = circuits[circuits['Year'].isin(years)].reset_index(drop=True)
+    h = hist.reindex(cur['Circuit']).reset_index(drop=True)
+    return cur.join((cur[cols] - h).add_prefix('Delta'))
+
+
+def pit_lane_time(length_m, limit_kmh):
+    """Seconds to drive the pit lane at the speed limit (length / limit). The part of a stop's loss the pit lane
+    sets: a changed limit or length moves pit loss by the change in this (modelling D16)."""
+    return np.asarray(length_m, float) / (np.asarray(limit_kmh, float) / 3.6)

@@ -124,6 +124,19 @@ simulator:   # inputs for the strategy simulator (single car, dry, no safety car
     shrink_grid: [0, 5, 10, 20, 50, 100, 200]
     shrink: 20
     min_laps: 5                    # clean laps a stint needs for its level
+    evolution: stint_start         # race fraction of the evolution term: stint_start (D32, 2026-11-23: removes the double count with the wear slope) or lap (v1 and v2 up to 2026-11-23)
+    basis: label                   # gap basis: label (v1) or c_step or c_index (Pirelli C numbers; D24: no gain, label stays)
+    race_spread: true              # D21: draw a race level shift of the Soft and Hard gaps per Monte Carlo draw (compound.race_gap_spread)
+    race_spread_reps: 30           # shifts drawn when there are no bootstrap refits to attach them to
+    compound_order: false          # raise a softer compound's wear to the harder one's, age by age (monotone.order_compounds)
+  new_set:   # a new set fitted at a stop (laptime.new_set_terms, notes/sim_v3_loose_ends.md); both off is v2
+    out_lap: false                 # out lap cost per compound, centred on the stop mix (the pit loss holds the average)
+    early_laps: 0                  # flying laps (ages 2, 3) on a new set with a measured offset against the wear curve; 0 off
+  search:   # strategy search options (simulator/strategy.py, scripts/tune_strategy_search.py)
+    cap_prior: usage               # D21: stint cap prior for a compound with few stints at a circuit: global (v1) or usage (scaled by how often teams ran it there)
+    cap_usage_full: 0.5            # usage: a compound run at least this share of its usual rate at the circuit keeps the global prior
+    start_tyre: real               # D28: real (v1): the car's real start tyre; free: any start compound (a new set unless it is the real start tyre).
+                                   # free leaned to Hard starts (169 of 381 cars, teams 71) from the weak compound gaps (D24), so the search stays real; the builder is always free
   noise:   # correlated lap noise (degradation/noise.py)
     min_laps: 8                    # clean laps a stint needs for its slope
     draws: 1000
@@ -131,18 +144,46 @@ simulator:   # inputs for the strategy simulator (single car, dry, no safety car
     recent_grid: [null, 1, 2, 3]   # null: all seasons
     recent: null                   # all seasons: last 2 was 0.04 s better on validation, within noise (D16)
     min_stops: 10                  # fewer recent stops than this: use all the circuit's seasons
+    limit_correction: true         # D26: shift past stops to the scored season's pit lane speed limit (data/reference/circuit_ratings.csv)
     target_min_stops: 5            # races scored in the pit loss test need this many stops
   uncertainty:   # compound gaps, wear curves and track evolution refitted on resampled training races (laptime.py)
     bootstrap: 30                  # refits; each Monte Carlo draw races on one. 0 switches it off
     seed: 0
   pace:   # each car's base pace, % behind the race's fastest base, from pre race features (simulator/pace.py)
     ridge_alpha: [0.1, 1, 10, 100]
-    chosen: 'ridge, alpha 100'     # scripts/train_simulator.py, validation MAE 0.436 % (QualiGap only 0.520) 2026-11-05
+    chosen: 'ridge, alpha 300, QualiGap+Grid+TeamFinishForm+DriverFinishForm'   # v2 (D18): validation MAE 0.343 % (v1 'ridge, alpha 100' 0.436, QualiGap only 0.520)
+    feature_sets: [[QualiGap, Grid, TeamFinishForm, DriverFinishForm], [QualiGap, TeamPaceForm, DriverPaceForm, TeamFinishForm, DriverFinishForm, Grid]]
+    feature_set_alpha: [100, 300, 1000]
+    reference: quali               # reference time per race: last_season (v1, the circuit's latest training base) or quali (v2, pace.QualiReference)
+    reference_shrink: 1            # quali reference: circuit ratio pulled toward the all circuit ratio, in races (validation 2023, 2024: k 1 best)
+    team_error: true               # draw the share of pace error teammates have in common once per team (pace.team_share, about 0.4 to 0.5)
   overtaking:   # rule based passing (overtaking.py): delta - beta x gap > circuit threshold
     window_s: 1.0                  # a car this close at the line can attempt a pass on the next lap
     beta: [0.0, 0.5, 1.0]          # seconds of pace advantage needed per second of gap
     shrink: [0, 50, 100, 200, 400, 800]   # circuit pass rate pulled toward the all circuit rate, in pairs
     chosen: 'circuit threshold, k 0, beta 1.0'   # validation passes per race MAE 10.0 (global 10.3, free 19.2); 2025 9.8 (global 15.6)
+    logit:   # learned pass probability per close pair (overtaking.PassLogit, simulator v2)
+      C: [0.1, 1.0]                # inverse ridge penalty
+      k: [50, 200]                 # circuit pass rate pulled toward the all circuit rate, in pairs
+      feature_sets: [[Delta, Gap, CircuitLogit], [Delta, Gap, CircuitLogit, AgeDiff, CompDiff]]   # ablation: no tyre terms; no stuck run
+      engine_shift: -1.5           # added to the logit in the engine only: matches the real pass count (scripts/tune_pass_calibration.py)
+  engine:   # race engine options (simulator/race.py engine_options); v1 values: fixed, adjacent
+    held_gap: fixed                # a held car's gap at the next line: fixed (follow gap) or draw (real held pairs)
+    reference: adjacent            # the car a car races: adjacent (started the lap just ahead) or max (slowest resolved ahead)
+    pass_margin_s: 0.3             # a drawn pass (pass logit) puts the car at least this far ahead at the line
+    pace_gap: drawn                # pace gap the passing rule reads: drawn (with the stint wear slope draws, v1) or model (as the rules are fitted)
+    close_air: flat                # time lost running inside the window: flat (the first dirty air band, v1) or measured (overtaking.close_air)
+    close_air_edges: [0.0, 0.3, 0.5, 0.7, 1.0]   # gap bands for the measured close air cost, s
+    lap1: grid                     # lap 1 order: grid (v1) or shuffle (grid pulled toward pace order plus noise, inputs.lap1_shuffle)
+    cover_search: true             # v2: in the strategy search, rivals answer a stop (race.simulate cover); never on real strategies
+    cover_model: true              # v2: in backtests, rivals on pit model strategies answer stops
+    cover_gap_s: 3.0               # the car ahead within this gap at the start of the lap can answer
+    cover_p: 0.10                  # chance it answers: excess of 14.6% over 4.5% expected (notes/simulator_v2.md section 8)
+    cover_laps: 10                 # only a stop due within this many laps is brought forward
+    sc_restart: measured           # v2.1 (D25): the train's gaps on the last safety car lap: train (v2) or measured (restart gaps, median 0.45 s)
+    red_flag_free: true            # v2.1 (D25): a stop on a red flag lap costs nothing (replays with the real red flags)
+    double_stack: false            # v2.1: the second of two teammates stopping on the same lap waits stack_s
+    stack_s: {0: 0.6, 1: 2.1, 2: 3.2}   # measured 2022 to 2024 (second car less first car): green, safety car, VSC
   race:   # the engine and the strategy search (simulator/race.py)
     draws: 200                     # Monte Carlo runs per race
     stop_lap_step: 2               # user car candidate stop laps every this many laps
@@ -152,14 +193,69 @@ simulator:   # inputs for the strategy simulator (single car, dry, no safety car
     coarse_draws: 50
     refine_draws: 400
     tie_places: 0.25               # strategies within this mean place of the best (or not clearly worse) are near ties
+    neutral_react_window: 6        # v2: the searched car's stop due within this many laps of a safety car or VSC moves onto it (0: fixed stops)
     seed: 0
     stint_cap:   # longest stint per circuit and compound the search allows (strategy.stint_caps)
       quantile: 0.95               # of tyre age at the stint's end, training seasons, dry races
       shrink: 20                   # pulled toward the compound's all circuit cap, in stints
 
+  backtest:   # scripts/backtest_simulator.py (v2: every dry race, safety cars raced)
+    v1_pace: 'ridge, alpha 100'    # the v1 pace model, raced as the v1 system for the before and after
+    blend_weights: [0.25, 0.5, 0.75]   # simulator mean place weight in the blend with the outcome predictor's place
+  neutral: true                    # v2: fit the safety car model (neutral.py) into the simulator inputs; false: v1, no safety cars
+  wet:   # wet races as a scenario tool, not a forecast (simulator/wet.py, scripts/simulate_wet.py, notes/wet_simulation.md). Off: the dry engine, unchanged
+    enabled: false                 # the dashboard and any caller race the wet track only when this is on; the CLI turns it on for its own runs
+    wet_compounds: [INTERMEDIATE, WET]   # raced as one wet tyre (full wets have too little green running to tell apart, D30)
+    ref_compound: MEDIUM           # a wet tyre lap is a fresh Medium's free air lap plus the track gap plus wet wear
+    wear_s_per_lap: 0.03           # wet tyre wear net of the track (wet study 2a, 63 refits; unstable by fold); the track drying is in the gap
+    hardness: 0.0                  # wet tyre hardness for the pass rule (the logit is fitted on dry pairs only)
+    trends: [5.9, 1.4, 9.7, 4.5, 1.0, 0.9, 2.7, 2.2]   # |gap trend|, s per lap per lap, of the 8 fitted crossover windows (wet study 2b); one drawn per crossover per draw
+    dry_level_s: 5.0               # the gap cap on a dry track (wet tyre slower): about the 75th percentile of measured positive replay gaps (notes/wet_simulation.md)
+    wet_level_s: -10.0             # the gap floor on a wet track (slicks slower): about the 25th percentile of measured negative replay gaps
+    switch_offsets: {-4: 3, -3: 3, -2: 3, -1: 10, 0: 20, 1: 26, 2: 22, 3: 11, 4: 7}   # rival switches by laps off the best switch lap: counts from the wet study (105 priced switches)
+    min_wet_laps: 2                # a rival whose wet stint would be shorter than this stays on slicks
+    min_stint_laps: 5              # a planned dry stop this close to a switch is dropped (the switch replaces it; simulator.race.min_stint_laps)
+    search_laps: 5                 # the searched car's switch laps: each crossover lap plus or minus this many
+    refine_top: 12                 # candidates raced against the field after the free air pass
+    draws: 200
+    seed: 0
+    scenario_neutral: false        # scenarios: false (no safety cars) or true (dry safety car model; wet races are not in its fit)
+    replay:   # track path of a real wet race (simulator/wet.py race_track)
+      min_cars: 1                  # cars a lap needs on each tyre group for its gap to be measured
+      outlier_pct: 1.07            # laps slower than this times the median of the same lap and tyre group are dropped
+      max_interp_laps: 3           # unmeasured gaps up to this long between measured laps are interpolated; longer ones use the field share path
+neutral:   # safety cars and VSCs for the simulator (neutral.py, simulator v2; notes/sim_v2_neutral.md). Tuned in scripts/tune_neutral.py
+  lap_share: 0.75                  # features.neutral_laps: a lap is neutral when this share of its cars saw the status (0: any car); fewest miscoded laps
+  exclude_races: [[2020, 1], [2021, 12]]   # Austria 2020: track status about 5 laps off the lap times; Belgium 2021: no racing
+  hazard:   # per lap start probability, one block per kind; shrink and lap1_shrink in races (null: one all circuit value, 0: raw circuit)
+    sc: {shrink: 10, lap1: true, lap1_shrink: 5, open_laps: 1, restart_laps: 0, frac_bins: [], season_decay: 1.0}     # D19 proposed, validation 2026-11-11
+    vsc: {shrink: 20, lap1: true, lap1_shrink: 100, open_laps: 1, restart_laps: 0, frac_bins: [], season_decay: 1.0}
+  multiplier_prior: 1.0            # opening lap, restart and race fraction multipliers pulled toward 1 with this many expected starts
+  duration: {sc: parametric, vsc: parametric}   # period length per kind: pool (training lengths, cut by the finish left out) or parametric (1 + negative binomial)
+  max_period_laps: 20              # longest period the parametric fit and the duration log score consider
+  conversion: true                 # a VSC can turn into a safety car on the lap after it ends
+  draws: 4000                      # race_probs draws
+  seed: 0
+  effects:   # measured in NeutralModel.fit_effects on the training seasons, red flag periods left out
+    close_alpha: 0.05              # train formed: first SC lap whose gaps a KS test at this level cannot tell from the later laps'
+    close_max: 6                   # laps searched for it
+    min_gaps: 50                   # gaps a lap of the period needs to be compared
+    neighbours: 2                  # stay out cars on each side of a stop that set its reference in lap and out lap
+    min_stayout: 5                 # stay out cars a lap needs for its stops to be measured
+    vsc_gap_max_s: 10.0            # VSC gap ratio: pairs within this of the car ahead before the VSC
+  study:   # scripts/tune_neutral.py grids, chosen on validation only
+    shrink: [0, 2, 5, 10, 20, 50, 100, null]
+    lap1_shrink: [0, 5, 20, 100, null]
+    open_laps: [1, 2, 3, 4]
+    restart_laps: [0, 2, 3]
+    frac_bins: [[], [0.33, 0.67]]
+    season_decay: [1.0, 0.8, 0.6]
+    min_gain: 0.002                # log loss per race a richer setting must gain on validation (and its paired 95% interval exclude 0)
+
 pit_decision:   # rival pit stops for the simulator (pitdecision.py): pit or not at the end of each lap, then which tyre
   # v1: dry races, green flag laps, tyre change stops only. Safety cars and gap/position features come in v2.
   first_lap: 2                     # stops at the end of lap 1 are damage, not strategy
+  tyre_change_only: true           # v2: a new stint on the same tyre (pit lane pass under a safety car) is not a stop (features.pit_labels); v1 false
   neutral_cooldown_laps: 1         # laps after a SC, VSC or red flag lap left out (stop timing distorted)
   age_shrink: 50                   # baseline: pit rate per compound and tyre age pulled toward the compound rate, in laps
   age_bin: 3                       # baseline tyre age bin, laps
@@ -186,6 +282,31 @@ pit_decision:   # rival pit stops for the simulator (pitdecision.py): pit or not
     draws: 200                     # simulated races per scored race
     green_races_only: true         # score replays only on races with no SC, VSC or red flag (v1 has no safety cars)
     seed: 0
+  neutral:   # v2: rival stops on SC and VSC laps (pitdecision NeutralPits; scripts/tune_sc_pit.py, notes/sim_v2_sc_pit.md)
+    enabled: true                  # fit_plan_policy attaches it; a replay uses it only when given status (status None is v1)
+    exclude_red_flag: true         # train without red flag runs (a red flag tyre change is free; status folds red into SC)
+    lap_dummies: 3                 # laps 1, 2, 3 of a neutral run get their own term; later laps share one
+    lap_rate_shrink: 50            # baseline: rate per type and lap of the run pulled toward the type rate, in laps
+    C: [0.01, 0.1, 1.0]            # neutral logit, standardised features, splines on tyre age, laps left, race fraction
+    groups: [neutral type and lap of the run, tyre, race, wear and pit loss]   # pitdecision.neutral_groups; type x lap, stops, plan expectation gained nothing
+    min_gain: 0.001                # validation log loss per row a feature group must gain to be kept
+    lgbm:
+      num_leaves: [4, 8]
+      n_estimators: [100, 300]
+      min_child_samples: 50
+      learning_rate: 0.03
+    again:   # after a stop on a neutral lap: another green flag stop later or not (the replan)
+      C: [0.01, 0.1, 1.0]
+      features: [IsSoft, IsHard, TwoCompounds, LapsLeft, RaceFrac, LeftShareCircuit, CircuitWear, PitLoss]   # StopsMade, ExpStopsLeft lost
+      spline_knots: 4
+      band_laps: 10                # baseline: rate per band of laps left
+      band_shrink: 20
+    plan_flags: zero               # plan model flags in a replay with status: zero, draw, circuit or starts
+    replan: redraw                 # after a neutral stop: none, add or redraw
+    flag_shrink: 10                # circuit flag rates (plan_flags circuit) pulled toward the overall rate, in races
+    chosen:   # picked by scripts/tune_sc_pit.py on validation log loss
+      hazard: 'neutral logit, C 0.1'
+      again: 'again logit, C 0.1'
 
 outcome:   # finishing position predictor, classified finishers only (modelling D6, O6)
   exclude_races: [[2021, 12]]      # Belgium 2021: three laps behind the safety car, no racing (data_issues.md)
@@ -207,13 +328,78 @@ dashboard:   # Streamlit app (app/main.py); presentation choices only, no model 
   show_holdout: false              # the app refuses to read data/processed/holdout/ until the shift study
   interval_level: 0.8              # wear curve band: share of laps expected inside it (from the fit's lap noise)
   stint_laps_default: 20           # stint length the Tyre Lab opens on (the degradation stint_length_ref)
+  strategy_room:   # scripts/build_strategy_room.py; engine and search settings come from the simulator block
+    races: dry                     # dry: every dry race, safety cars sampled (v2); green: no SC, VSC or red flag lap (v1)
+    drivers: null                  # top finishers searched per race; null: every classified finisher
+    draws: 200                     # Monte Carlo races per strategy (the field's pace and rival strategy draws)
+    seed: 0
+    use_caps: true                 # keep stints within the circuit's stint caps (simulator.race.stint_cap)
+    chart_strategies: 3            # best strategies in the place chart, with the real one
+    table_rows: 10                 # strategies in the ranked table before "show all"
+  overtaking:   # scripts/build_overtaking.py; pass model fitted on the overtaking seasons before the test season
+    model: 'pass logit, C 1.0, k 200'   # an overtaking.candidates name (simulator.overtaking.logit grid)
+    gap_s: 0.6                     # gap at the line the page's curves are drawn at
+    delta_s: 0.5                   # pace advantage, s per lap, for the per circuit and effect numbers
+    delta_range: [-0.5, 2.5]       # pace advantage axis of the curves
+    contrast: [Sakhir, Monaco]     # the key number: how much likelier a pass is at the first than the second
+    curve_circuits: [Monaco, Barcelona, Monza, Sakhir]   # circuits the curve chart opens on
+    calibration_bins: 10
   pages:   # true shows the page; switch a page on once its view is built (a "soon" page shows a placeholder card)
     paddock: true
     tyre_lab: true
     race_predictor: true
-    strategy_room: false
+    strategy_room: true
     pit_wall: false
-    overtaking: false
-    shift_study: false
+    overtaking: true
+    shift_study: true              # tables from scripts/build_shift_page.py (data/models/shift_*.parquet)
     methods: true
     style_guide: false             # every component in one place, for design work
+
+shift_study:   # 2026 shift study and its 2022 rehearsal (shift.py, scripts/shift_study.py, notes/shift_study.md); study only
+  outcome_model: 'ridge, alpha 1000'   # the final finishing predictor (train_outcome.py), refit per split, not reselected
+  season_adjust: {scope: compound, shrink: 100}   # SeasonScaled, chosen on the rehearsal shift (2022 MAE 0.6487, ties shrink 200) and frozen before 2026
+  exclude_circuits: [Madrid]   # 2026-11-24: new circuit, no history, tests the new circuit fallback rather than the regulation change; decided after the first 2026 run, results with it kept in notes/runs/2026-11-23_shift_study.txt. [] restores it
+
+reference:   # external reference tables in data/reference (reference.py; notes/sim_v2_reference.md). Study only, no model reads them yet
+  compounds: pirelli_compounds.csv   # Pirelli Hard, Medium and Soft C numbers per race 2022 to 2026 (supersedes pirelli_2025_2026.csv)
+  circuits: circuit_ratings.csv      # per race 2019 to 2026: Pirelli 1 to 5 ratings (2022 to 2025), lap, turns, DRS, pit lane, resurfacing
+  strategies: pirelli_strategies.csv   # Pirelli's predicted fastest race strategy per race 2022 to 2025 (race eve release), a benchmark
+  c_rename: {2022: {1: 0}}           # 2022's C1 is the compound called C0 from 2023 (a new C1 was added); features.compound_index
+  tyre_eras: [[2022, 2025], [2026, 2026]]   # C numbers compare within an era only; 2026 is a new, narrower tyre family
+  study:   # scripts/tune_reference_features.py
+    base_shrink: 10                  # linear wear model the shifts are measured against (as explain_wear_swings.py)
+    min_cell_stints: 5               # race and compound cells need this many stints for a shift (1 or 2 stints give shifts up to 1.8)
+    slope_feats:                     # descriptor sets for the no history slope prior (reference.RatedSlopes)
+      - []
+      - [CIndex]
+      - [AsphaltAbrasion]
+      - [TyreStress]
+      - [AsphaltAbrasion, TyreStress]
+      - [CIndex, AsphaltAbrasion, TyreStress]
+      - [Traction, Braking, Lateral, TyreStress, AsphaltGrip, AsphaltAbrasion, TrackEvolution, Downforce]
+    slope_alpha: [1, 10, 100]        # ridge penalty on the descriptor coefficients, in capped stints
+    slope_max_weight: 50             # a cell's weight is its stints, capped here
+    recommended_prior: {feats: [AsphaltAbrasion], alpha: 10}   # chosen on the leave one circuit out validation (2026-11-11); --test scores 2025 with it once
+    loco_seasons: [2022, 2023, 2024] # leave one circuit out seasons for the slope prior (2025 is the degradation test)
+    pass_extra: [[DRSZones], [Street], [DRSZones, Street]]   # extra pair columns for the pass logit study
+    bootstrap: 2000
+
+wet:   # wet race study only (wet.py, scripts/study_wet.py, notes/wet_and_degradation_2026-11-23.md); no model or the simulator reads it
+  compounds: [INTERMEDIATE, WET]   # wet tyres for the wear study (features.wet_clean)
+  outlier_pct: 1.07                # wet tyre laps slower than this times the driver's median in that stint are dropped
+  wear_seasons: [2022, 2023, 2024, 2025]   # same splits as degradation: validation 2023 and 2024, test 2025
+  shrink_grid: [0, 10, 50]         # circuit slope blending, in stints (chosen on validation; few circuits repeat)
+  min_stints: 15                   # scored stints a compound needs in a fold to be reported
+  track_iters: 100                 # alternating demeaning rounds for the wear rate net of the track (driver race and race lap effects)
+  crossover:
+    seasons: [2019, 2020, 2021, 2022, 2023, 2024, 2025]   # descriptive, so every pre 2026 season
+    wet_group: [INTERMEDIATE]      # tyres compared with slicks (full wets barely overlap with slicks)
+    outlier_pct: 1.07              # laps slower than this times the race lap's median on the same tyre group are dropped
+    min_cars: 2                    # cars on each tyre group for a lap to count as overlap
+    allow_yellow: true             # keep laps under local yellows (wet races have many); SC, VSC and red flag laps always go
+    max_gap_laps: 2                # overlap laps this close are one window
+    pad_laps: 3                    # laps either side of a window that inform driver and lap effects
+    min_window_laps: 2             # overlap laps a window needs to be fitted
+    max_extrapolate_laps: 5        # a crossover this far outside its window is reported as not found
+    driver_effects: true           # one pace offset per driver, so the gap is not a fast car versus slow car gap
+    bootstrap: 200                 # resamples of drivers for the crossover lap's interval
