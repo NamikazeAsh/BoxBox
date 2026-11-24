@@ -49,3 +49,65 @@ def track_maps():
 
 def training(component):
     return seasons_for(cfg(), component)
+
+
+def _need_room(load):
+    """Strategy Room loaders import the simulator only when that page runs, so the other pages never depend on it."""
+    try:
+        return load()
+    except FileNotFoundError as e:
+        st.error(f'Missing data: {e.filename}. Build it with `python scripts/build_strategy_room.py` '
+                 '(about 15 minutes), then restart the app.')
+        st.stop()
+
+
+@st.cache_data(show_spinner=False)
+def room():
+    """Strategy Room tables (strategy_room.TABLES)."""
+    from boxbox import strategy_room
+    return _need_room(lambda: strategy_room.load(cfg()))
+
+
+@st.cache_resource(show_spinner=False)
+def room_inputs():
+    """The simulator inputs the room's searches raced on (fitted before the test season)."""
+    from boxbox import strategy_room
+    return _need_room(lambda: strategy_room.load_inputs(cfg()))
+
+
+@st.cache_resource(show_spinner=False)
+def room_field(year, rnd):
+    from boxbox import strategy_room
+    return strategy_room.field_from_tables(room(), year, rnd)
+
+
+@st.cache_data(show_spinner=False, max_entries=200)
+def room_race(year, rnd, driver, comps, stops):
+    """Per draw places of one strategy raced against the saved field (the strategy builder)."""
+    from boxbox import strategy_room
+    place, _ = strategy_room.race_strategy(room_inputs(), room_field(year, rnd), driver, comps, stops, cfg())
+    return place
+
+
+@st.cache_data(show_spinner=False)
+def shift():
+    """2026 Shift page tables (shift_view.TABLES), precomputed: the app never reads the holdout season itself."""
+    from boxbox import shift_view
+    try:
+        return shift_view.load(cfg())
+    except FileNotFoundError as e:
+        st.error(f'Missing data: {e.filename}. Build it with `python scripts/build_shift_page.py` (about 3 minutes), '
+                 'then restart the app.')
+        st.stop()
+
+
+@st.cache_data(show_spinner=False)
+def overtaking():
+    """Overtaking page tables (overtaking_view.TABLES)."""
+    from boxbox import overtaking_view
+    try:
+        return overtaking_view.load(cfg())
+    except FileNotFoundError as e:
+        st.error(f'Missing data: {e.filename}. Build it with `python scripts/build_overtaking.py` (a few minutes), '
+                 'then restart the app.')
+        st.stop()

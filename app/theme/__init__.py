@@ -51,6 +51,11 @@ def inject():
     st.html(f'<style>{_CSS.read_text(encoding="utf-8")}</style>')
 
 
+def ink():
+    """The theme's text colour (for marks that must read as strongly as text)."""
+    return '#ECECEF' if mode() == 'dark' else '#17171B'
+
+
 def muted():
     return '#8B8E98' if mode() == 'dark' else '#62646E'
 

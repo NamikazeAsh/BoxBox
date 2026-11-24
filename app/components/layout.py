@@ -15,20 +15,50 @@ def section(title, note=''):
     st.html(f'<div class="bb-section"><h3>{escape(title)}</h3>{f"<span>{escape(note)}</span>" if note else ""}</div>')
 
 
-def stats(items):
-    """items: dicts with value, label, optional unit and key (True paints the value red; use once per page)."""
+def stats(items, vertical=False):
+    """items: dicts with value, label, optional unit and key (True paints the value red; use once per page).
+    vertical: stack them in a column (beside a card) instead of a row."""
     cells = ''
     for i in items:
         unit = f'<small>{escape(i["unit"])}</small>' if i.get('unit') else ''
         key = ' key' if i.get('key') else ''
         cells += (f'<div class="bb-stat"><div class="v{key}">{escape(str(i["value"]))}{unit}</div>'
                   f'<div class="l">{escape(i["label"])}</div></div>')
-    st.html(f'<div class="bb-stats">{cells}</div>')
+    st.html(f'<div class="bb-stats{" vert" if vertical else ""}">{cells}</div>')
 
 
 def radio(message, who='Pit wall radio'):
     st.html(f'<div class="bb-radio"><span class="ic">{_RADIO_ICON}</span><div><div class="who">{escape(who)}</div>'
             f'<div class="msg">{escape(message)}</div></div></div>')
+
+
+def call_card(headline, points, who='Pit wall radio'):
+    """The radio card with a headline (the call) and a few short lines under it (why, what it is worth, how sure)."""
+    items = ''.join(f'<li><b>{escape(k)}</b>{escape(v)}</li>' for k, v in points)
+    st.html(f'<div class="bb-radio"><span class="ic">{_RADIO_ICON}</span><div><div class="who">{escape(who)}</div>'
+            f'<div class="msg">{escape(headline)}</div><ul class="bb-why">{items}</ul></div></div>')
+
+
+def call_panel(kicker, headline, chips_html, blocks, who='Pit wall radio'):
+    """The radio card as a panel: a headline with the strategy as tyre chips, then labelled blocks of pills and
+    meters (blocks: (label, inner html) pairs, html built by the caller from escaped text)."""
+    grid = ''.join(f'<div class="blk"><div class="lab">{escape(label)}</div>{inner}</div>' for label, inner in blocks)
+    st.html(f'<div class="bb-radio bb-call"><span class="ic">{_RADIO_ICON}</span><div class="body"><div class="who">{escape(who)}</div>'
+            f'<div class="msg"><span class="kick">{escape(kicker)}</span>{escape(headline)}{chips_html}</div>'
+            f'<div class="grid">{grid}</div></div></div>')
+
+
+def tiles(items):
+    """A row of result tiles: items are dicts with label, value, optional sub (small text under the value), tone
+    ('good', 'bad' or '') and bar (0 to 1, a small meter under the value)."""
+    cells = ''
+    for i in items:
+        bar = (f'<span class="m"><i style="width:{max(0.0, min(1.0, i["bar"])) * 100:.0f}%"></i></span>'
+               if i.get('bar') is not None else '')
+        sub = f'<span class="s">{escape(i["sub"])}</span>' if i.get('sub') else ''
+        cells += (f'<div class="bb-tile {i.get("tone", "")}"><span class="l">{escape(i["label"])}</span>'
+                  f'<span class="v">{escape(i["value"])}</span>{bar}{sub}</div>')
+    st.html(f'<div class="bb-tiles">{cells}</div>')
 
 
 def soon(entry):
