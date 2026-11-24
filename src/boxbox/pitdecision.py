@@ -389,22 +389,27 @@ class RivalPolicy:
     """weekend: use the weekend shifted wear features. offsets: per race season correction (season_offsets), a
     Series by Year and Round added to the log odds; set it for the race being simulated."""
 
-    def __init__(self, hazard, tyre, ctx, cfg, weekend=False, offsets=None):
+    def __init__(self, hazard, tyre, ctx, cfg, weekend=False, offsets=None, neutral=None):
+        """neutral: a NeutralPits (fit_neutral) for laps under a safety car or VSC; used only by a replay given status."""
         c = cfg['pit_decision']
         self.hazard, self.tyre, self.ctx, self.weekend, self.offsets = hazard, tyre, ctx, weekend, offsets
         self.first_lap, self.force_stop = c['first_lap'], c['force_stop_laps_left']
+        self.neutral = neutral
 
     def features(self, state):
         return add_features(state, self.ctx, self.weekend)
 
-    def pit_prob(self, state, d=None):
-        """Chance of pitting at the end of the lap. None before first_lap or on the last lap; certain when the two
-        compound rule is unmet with force_stop_laps_left or fewer laps to go."""
-        d = self.features(state) if d is None else d
-        p = shift_logit(self.hazard.prob(d), offsets_for(d, self.offsets))
+    def rules(self, d, p):
+        """No stop before first_lap or on the last lap; a certain stop when the two compound rule is unmet with
+        force_stop_laps_left or fewer laps to go."""
         p = np.where((d['LapNumber'] < self.first_lap) | (d['LapsLeft'] <= 0), 0.0, p)
         force = (d['TwoCompounds'] == 0) & (d['LapsLeft'] <= self.force_stop) & (d['LapsLeft'] > 0)
         return np.where(force, 1.0, p)
+
+    def pit_prob(self, state, d=None):
+        """Chance of pitting at the end of a green lap, then the rules."""
+        d = self.features(state) if d is None else d
+        return self.rules(d, shift_logit(self.hazard.prob(d), offsets_for(d, self.offsets)))
 
     def tyre_probs(self, state, d=None):
         return self.tyre.probs(self.features(state) if d is None else d)
@@ -570,8 +575,8 @@ class PlanPolicy(RivalPolicy):
     the plan model for every car (stops fall from season to season; set it from recent races or the tyre
     supplier's predicted strategy)."""
 
-    def __init__(self, plan, cstops, hazard, tyre, ctx, cfg, oracle=False, plan_offsets=None, plan_shares=None):
-        super().__init__(hazard, tyre, ctx, cfg)
+    def __init__(self, plan, cstops, hazard, tyre, ctx, cfg, oracle=False, plan_offsets=None, plan_shares=None, neutral=None):
+        super().__init__(hazard, tyre, ctx, cfg, neutral=neutral)
         self.plan, self.cstops, self.oracle, self.plan_offsets = plan, cstops, oracle, plan_offsets
         self.plan_shares = plan_shares
 
@@ -587,19 +592,24 @@ class PlanPolicy(RivalPolicy):
         idx = (p.cumsum(axis=1) < rng.random(len(p))[:, None]).sum(axis=1)
         return np.array(PLANS, dtype=float)[np.minimum(idx, len(PLANS) - 1)]
 
-    def pit_prob(self, state, d=None):
-        d = self.features(state) if d is None else d
-        p = np.where(d['StopsLeft'] >= 1, self.hazard.prob(d), 0.0)
+    def rules(self, d, p):
         p = np.where((d['LapNumber'] < self.first_lap) | (d['LapsLeft'] <= 0), 0.0, p)
         due = (d['TwoCompounds'] == 0) | (d['StopsLeft'] >= 1)
         force = due & (d['LapsLeft'] <= self.force_stop) & (d['LapsLeft'] > 0)
         return np.where(force, 1.0, p)
 
+    def pit_prob(self, state, d=None):
+        d = self.features(state) if d is None else d
+        return self.rules(d, np.where(d['StopsLeft'] >= 1, self.hazard.prob(d), 0.0))
 
-def fit_plan_policy(laps, pre, results, stops, years, cfg):
+
+def fit_plan_policy(laps, pre, results, stops, years, cfg, neutral=None):
     """The chosen PlanPolicy (pit_decision.chosen: timing and plan model names) fitted on years, as
-    scripts/train_pit_decision.py fits the final one. For simulator folds and backtests."""
+    scripts/train_pit_decision.py fits the final one. For simulator folds and backtests. neutral: attach the
+    chosen NeutralPits (fit_neutral, used only when a replay gets status); None follows pit_decision.neutral.enabled."""
     c = cfg['pit_decision']
+    if neutral is None:
+        neutral = c.get('neutral', {}).get('enabled', False)
     starts = race_starts(laps, pre, results, years, cfg, green_only=False)
     rows = pit_laps(laps, pre, cfg)
     rows = rows[rows['Year'].isin(years)].merge(starts[DRIVER_RACE + ['Plan']], on=DRIVER_RACE).reset_index(drop=True)
@@ -609,7 +619,10 @@ def fit_plan_policy(laps, pre, results, stops, years, cfg):
     hazard = timing_candidates(cfg)[c['chosen']['timing']]().fit(full)
     plan = plan_candidates(cfg)[c['chosen']['plan']]().fit(ftr)
     tyre = TyreChoice(c['tyre_C'], c['force_new_compound_laps_left'], TYRE_FEATURES + ['StopsLeft']).fit(full)
-    return PlanPolicy(plan, cs, hazard, tyre, ctx, cfg)
+    policy = PlanPolicy(plan, cs, hazard, tyre, ctx, cfg)
+    if neutral:
+        policy.neutral = fit_neutral(policy, laps, pre, starts, years, cfg)
+    return policy
 
 
 # Evaluation
@@ -697,43 +710,84 @@ def race_starts(laps, pre, results, years, cfg, green_only=None):
     return s.reset_index(drop=True)
 
 
-def replay(policy, starts, draws=200, seed=0, record=False):
+def replay(policy, starts, draws=200, seed=0, record=False, status=None):
     """Simulate every start's tyre stops through the race with the policy, draws times each: start on the real
-    first tyre (a PlanPolicy first draws the car's plan), pit each lap with the policy's chance, fit the policy's tyre. One row per draw and driver with
-    SimStops and SimFirst (lap of the first stop, NaN if none). Ignores everything but the car's own state (v1).
-    record=True also returns every stop (Draw, Driver, Lap, Compound fitted), for simulator.strategy.model_stints."""
+    first tyre (a PlanPolicy first draws the car's plan), pit each lap with the policy's chance, fit the policy's
+    tyre. One row per draw and driver with SimStops and SimFirst (lap of the first stop, NaN if none). Ignores
+    everything but the car's own state and the track status. record=True also returns every stop (Draw, Driver,
+    Lap, Compound fitted), for simulator.strategy.model_stints.
+
+    status (simulator v2): None races every lap green, exactly as v1. Otherwise the track status of each lap
+    (features.NEUTRAL_CODES): one int array, draws x (race laps + 1) with index = lap number (or 1 row for every
+    draw), for every start, or {(Year, Round): array} for starts from several races (status_matrix). A policy with a
+    NeutralPits (policy.neutral) then pits on neutral and cooldown laps with its hazard, gives the plan model the
+    flags of NeutralPits.plan_flags and replans after a stop made on a neutral lap (NeutralPits.replan); such a stop
+    uses up a planned stop if one is left, otherwise it is an extra stop. Without a NeutralPits the green hazard runs
+    on every lap. The output gains SimNeutral (stops made at the end of a neutral lap) and PlanEnd (the plan after
+    replans), and recorded stops gain LapStatus (the lap's status code)."""
     s = start_state(starts.loc[starts.index.repeat(draws)].reset_index(drop=True))
     s['Draw'] = np.tile(np.arange(draws), len(starts))
     s['FreshTyre'], s['SimStops'], s['SimFirst'] = s['FreshTyre'].astype(bool), 0, np.nan
     rng = np.random.default_rng(seed)
     events = []
+    neutral = None
+    if status is not None:
+        code = status_matrix(status, s, draws)
+        neutral = getattr(policy, 'neutral', None)
+        s['SimNeutral'] = 0
+        if neutral is not None:
+            nf = status_features(code, neutral.cooldown)
+            neutral.set_flags(s, code)
     if isinstance(policy, PlanPolicy):   # oracle=True keeps the starts' real Plan
         s['Plan'] = s['Plan'] if policy.oracle else policy.sample_plan(s, rng)
     else:
         s = s.drop(columns='Plan', errors='ignore')
+    if neutral is not None:
+        s = s.assign(**plan_columns(policy, s, expected=neutral.needs_plan))
+        plan0 = s['Plan'].copy() if 'Plan' in s else None
     for lap in range(1, int(s['RaceLaps'].max())):
         s['LapNumber'] = float(lap)
         on = (lap < s['RaceLaps']).to_numpy()
         if lap >= policy.first_lap and on.any():
             st = s[on]
             d = policy.features(st)
-            stop = rng.random(len(st)) < policy.pit_prob(st, d)
+            p = policy.pit_prob(st, d)
+            if neutral is not None:
+                now = {k: v[on, lap] for k, v in nf.items()}
+                dom = (now['LapStatus'] > 0) | now['Cooldown']
+                if dom.any():
+                    dn = neutral.features(d[dom].assign(**{k: v[dom] for k, v in now.items()}))
+                    p = np.array(p, dtype=float)
+                    p[dom] = neutral.pit_prob(policy, dn)
+            stop = rng.random(len(st)) < p
             if stop.any():
                 idx = st.index[stop]
                 new = policy.choose_tyre(st[stop], rng, d[stop])
+                lapcode = None if status is None else code[on, lap][stop]
                 if record:
-                    events.append(pd.DataFrame({'Draw': s.loc[idx, 'Draw'].to_numpy(), 'Driver': s.loc[idx, 'Driver'].to_numpy(),
-                                                'Lap': float(lap), 'Compound': new}))
+                    ev = pd.DataFrame({'Draw': s.loc[idx, 'Draw'].to_numpy(), 'Driver': s.loc[idx, 'Driver'].to_numpy(),
+                                       'Lap': float(lap), 'Compound': new})
+                    if status is not None:
+                        ev['LapStatus'] = lapcode
+                    events.append(ev)
                 s.loc[idx, 'Compound'], s.loc[idx, 'TyreLife'], s.loc[idx, 'FreshTyre'] = new, 0.0, True
                 s.loc[idx, 'Stint'] += 1
                 s.loc[idx, 'SimStops'] += 1
                 s.loc[idx, 'SimFirst'] = s.loc[idx, 'SimFirst'].fillna(float(lap))
                 for comp, col in USED.items():
                     s.loc[idx, col] = s.loc[idx, col] | (new == comp)
+                if status is not None:
+                    s.loc[idx, 'SimNeutral'] += (lapcode > 0).astype(int)
+                    if neutral is not None and plan0 is not None and (lapcode > 0).any():
+                        neutral.replan_after(policy, s, idx[lapcode > 0], rng)
         s['TyreLife'] += 1
-    out = s[DRIVER_RACE + ['Draw', 'SimStops', 'SimFirst'] + (['Plan'] if 'Plan' in s else [])]
+    extra = [] if status is None else ['SimNeutral']
+    if neutral is not None and plan0 is not None:
+        s['PlanEnd'], s['Plan'] = s['Plan'], plan0
+        extra.append('PlanEnd')
+    out = s[DRIVER_RACE + ['Draw', 'SimStops', 'SimFirst'] + (['Plan'] if 'Plan' in s else []) + extra]
     if record:
-        cols = ['Draw', 'Driver', 'Lap', 'Compound']
+        cols = ['Draw', 'Driver', 'Lap', 'Compound'] + ([] if status is None else ['LapStatus'])
         return out, (pd.concat(events, ignore_index=True) if events else pd.DataFrame(columns=cols))
     return out
 
@@ -751,4 +805,484 @@ def replay_metrics(sim, starts):
     out.update({'Mean stops, real': a['Stops'].mean(), 'Mean stops, sim': a['SimStops'].mean(),
                 'Stops MAE': (a['SimStops'] - a['Stops']).abs().mean(),
                 'First stop MAE, laps': (a['SimFirst'] - a['FirstStop']).abs().mean(), 'Drivers': len(a)})
+    return out
+
+
+# Neutral laps (simulator v2): rival stops under a safety car or a virtual safety car
+
+SC_CODE = features.NEUTRAL_CODES['safety car']
+VSC_CODE = features.NEUTRAL_CODES['virtual safety car']
+STATUS = ['LapStatus', 'NeutralLap', 'NeutralLast', 'Cooldown']
+NEUTRAL_SPLINE = ['TyreLife', 'LapsLeft', 'RaceFrac']
+
+
+def neutral_groups(lap_dummies):
+    """Every feature group tried for the neutral pit hazard, in the order the ablation adds them; the hazard uses
+    the groups named in pit_decision.neutral.groups."""
+    lap = [f'NeutralLap{k}' for k in range(1, lap_dummies + 1)]
+    return {'neutral type and lap of the run': ['IsVSC', 'Cooldown', 'NeutralLast'] + lap,
+            'type x lap': [f'VSCLap{k}' for k in range(1, lap_dummies + 1)],
+            'tyre': ['IsSoft', 'IsHard', 'TyreLife', 'FreshTyre', 'AgeShareCircuit'],
+            'race': ['LapsLeft', 'RaceFrac'],
+            'stops': ['StopsMade', 'TwoCompounds'],
+            'plan expectation': ['ExpStopsLeft'],
+            'wear and pit loss': ['WearLoss', 'WearRate', 'CircuitWear', 'PitLoss']}
+
+
+def tyre_changes(laps, cfg):
+    """features.pit_labels PitStop less the pit lane passes that keep the same tyre (the next lap runs the same
+    compound one lap older). Under some safety cars the field is led through the pit lane, or cars sit in it, and
+    the timing data then starts a new stint (Qatar 2024, Canada 2025, Austria 2023 and others)."""
+    l = laps.sort_values(DRIVER_RACE + ['LapNumber'])
+    g = l.groupby([l['Year'], l['Round'], l['Driver']])
+    same = (g['Compound'].shift(-1) == l['Compound']) & (g['TyreLife'].shift(-1) == l['TyreLife'] + 1)
+    return (features.pit_labels(l, cfg)['PitStop'] & ~same).reindex(laps.index)
+
+
+def status_features(code, cooldown):
+    """Per lap features of status codes (rows x laps + 1, index = lap number, features.NEUTRAL_CODES): LapStatus (the
+    code), NeutralLap (laps since the run of neutral laps began, 1 on its first lap, 0 on green laps), NeutralLast
+    (the run's last lap: the next lap is green) and Cooldown (a green lap within cooldown laps after a neutral lap;
+    the green timing model never saw these, features.pit_labels). A run may mix safety car and VSC laps."""
+    code = np.atleast_2d(np.asarray(code))
+    on = code > 0
+    run = np.zeros(code.shape, np.int16)
+    for j in range(1, code.shape[1]):
+        run[:, j] = np.where(on[:, j], run[:, j - 1] + 1, 0)
+    nxt = np.zeros_like(on)
+    nxt[:, :-1] = on[:, 1:]
+    cool = np.zeros_like(on)
+    for k in range(1, cooldown + 1):
+        cool[:, k:] |= on[:, :-k]
+    return {'LapStatus': code.astype(np.int8), 'NeutralLap': run, 'NeutralLast': on & ~nxt, 'Cooldown': cool & ~on}
+
+
+def lap_codes(laps, cfg):
+    """features.neutral_laps with the share of cars the status sampler uses (neutral.lap_share), so the rivals and
+    the sampled status read laps the same way."""
+    share = cfg.get('neutral', {}).get('lap_share')
+    return features.neutral_laps(laps) if share is None else features.neutral_laps(laps, share)
+
+
+def race_status(laps, cfg):
+    """{(Year, Round): status codes, 1 x (race laps + 1)} of each race in laps (lap_codes): the real race's status
+    as replay takes it, the same for every draw."""
+    out = {}
+    for (y, r), g in lap_codes(laps, cfg).groupby(RACE):
+        lap = g['LapNumber'].to_numpy(int)
+        a = np.zeros((1, lap.max() + 1), np.int8)
+        a[0, lap] = g['Neutral'].to_numpy()
+        out[(int(y), int(r))] = a
+    return out
+
+
+def status_table(laps, cfg):
+    """Per race lap of laps: the STATUS columns (status_features of race_status) and RedFlagRun (the lap's neutral
+    run had a red flag lap, track status 5, or the lap is in the cooldown after such a run)."""
+    cool = cfg['pit_decision']['neutral_cooldown_laps']
+    red = laps['TrackStatus'].astype(str).str.contains('5').groupby([laps['Year'], laps['Round'], laps['LapNumber']]).any()
+    out = []
+    for (y, r), a in race_status(laps, cfg).items():
+        f = {k: v[0] for k, v in status_features(a, cool).items()}
+        lap = np.arange(a.shape[1])
+        key = pd.MultiIndex.from_arrays([np.full(len(lap), y), np.full(len(lap), r), lap.astype(float)])
+        rf = red.reindex(key, fill_value=False).to_numpy(bool)
+        on = f['LapStatus'] > 0
+        run = np.cumsum(on & ~np.r_[False, on[:-1]])   # the run a lap belongs to (a cooldown lap: the run before it)
+        bad = np.isin(run, run[rf & on]) & (on | f['Cooldown'])
+        out.append(pd.DataFrame({'Year': y, 'Round': r, 'LapNumber': lap.astype(float), **f, 'RedFlagRun': bad}).iloc[1:])
+    return pd.concat(out, ignore_index=True)
+
+
+def status_matrix(status, s, draws):
+    """Each replay row's status codes (rows x laps + 1, int8) from replay's status argument."""
+    width = int(s['RaceLaps'].max()) + 1
+    out = np.zeros((len(s), width), np.int8)
+    draw = s['Draw'].to_numpy(int)
+    groups = s.groupby(RACE).indices if isinstance(status, dict) else {None: np.arange(len(s))}
+    for key, idx in groups.items():
+        a = np.atleast_2d(np.asarray(status if key is None else status[(int(key[0]), int(key[1]))]))
+        if a.shape[0] not in (1, draws):
+            raise ValueError(f'status {key}: {a.shape[0]} rows, expected 1 or {draws} (draws)')
+        need = int(s['RaceLaps'].to_numpy()[idx].max()) + 1
+        if a.shape[1] < need:
+            raise ValueError(f'status {key}: {a.shape[1]} columns, the race needs {need} (laps + 1)')
+        w = min(a.shape[1], width)
+        out[idx, :w] = a[draw[idx] if a.shape[0] > 1 else np.zeros(len(idx), int), :w]
+    return out
+
+
+def after_stop(state, new):
+    """The cars' state just after a stop at the end of their lap: the new tyre at age 1 (its first lap), one more
+    stint, the used flags updated."""
+    s = state.copy()
+    new = np.asarray(new, dtype=object)
+    s['Compound'], s['TyreLife'], s['FreshTyre'], s['Stint'] = new, 1.0, True, s['Stint'] + 1
+    for comp, col in USED.items():
+        s[col] = s[col].astype(bool) | (new == comp)
+    return s
+
+
+def neutral_rows(laps, pre, starts, cfg):
+    """Training rows of the neutral models from the dry races of starts (race_starts rows: classified finishers with
+    their realised Plan). Returns (rows, stops).
+    rows: one per car per lap the green timing model leaves out (a neutral lap, status code 1 or 2, or a cooldown lap
+    after one), from first_lap, not the race's last lap, on a known dry tyre, PitIn laps with no new stint (a
+    penalty, retiring) left out, and with neutral.exclude_red_flag the red flag runs and their cooldown left out.
+    STATE, Plan, the STATUS columns and PitStop (tyre_changes); Stint counts tyre changes only.
+    stops: the rows' stops on neutral laps, each as the car's state just after it (after_stop) with Again: another
+    tyre change later in the race on a lap the green model covers."""
+    c = cfg['pit_decision']
+    l = laps.merge(starts[RACE].drop_duplicates(), on=RACE)
+    l = l[~l['WetRace']].sort_values(DRIVER_RACE + ['LapNumber']).reset_index(drop=True)
+    by = [l['Year'], l['Round'], l['Driver']]
+    l['Penalty'] = l['PitIn'] & ~(l.groupby(by)['Stint'].shift(-1) > l['Stint'])
+    l['PitStop'] = tyre_changes(l, cfg).astype(bool)
+    l['Stint'] = 1.0 + l.groupby(by)['PitStop'].cumsum() - l['PitStop']
+    l['RaceLaps'] = l.groupby(RACE)['LapNumber'].transform('max')
+    l['NextCompound'] = l.groupby(by)['Compound'].shift(-1)
+    for comp, col in USED.items():
+        l[col] = (l['Compound'] == comp).groupby(by).cummax()
+    l = l.merge(status_table(l, cfg), on=RACE + ['LapNumber'], how='left')
+    green = (l['LapStatus'] == 0) & ~l['Cooldown'].astype(bool)
+    gs = (l['PitStop'] & green).astype(int)
+    by = [l['Year'], l['Round'], l['Driver']]
+    l['LaterGreen'] = gs.groupby(by).transform('sum') - gs.groupby(by).cumsum()
+    keep = (~green & ~l['Penalty'] & (l['LapNumber'] >= c['first_lap']) & (l['LapNumber'] < l['RaceLaps'])
+            & l['Compound'].isin(DRY) & l['TyreLife'].notna())
+    if c['neutral']['exclude_red_flag']:
+        keep &= ~l['RedFlagRun'].astype(bool)
+    rows = l[keep].merge(starts[DRIVER_RACE + ['Plan']], on=DRIVER_RACE).merge(pre, on=DRIVER_RACE, how='left')
+    rows = rows[STATE + ['Plan', 'PitStop', 'NextCompound', 'LaterGreen'] + STATUS].reset_index(drop=True)
+    st = rows[rows['PitStop'] & (rows['LapStatus'] > 0) & rows['NextCompound'].isin(DRY)]
+    st = after_stop(st, st['NextCompound']).assign(Again=lambda x: x['LaterGreen'] > 0)
+    return rows, st.reset_index(drop=True)
+
+
+def plan_columns(policy, starts, leave_season_out=False, expected=True):
+    """Per starts row: CircuitStops (the circuit's mean plan) and, with expected, ExpPlan (the plan model's expected
+    stops, 3+ as 3, for a green race: NEUTRAL flags 0). leave_season_out for training rows. NaN without a plan model."""
+    z = starts.assign(**{f: 0.0 for f in NEUTRAL})
+    out = pd.DataFrame(np.nan, index=starts.index, columns=['ExpPlan', 'CircuitStops'])
+    if not isinstance(policy, PlanPolicy):
+        return out
+    if policy.cstops is not None:
+        out['CircuitStops'] = policy.cstops.predict(z, leave_season_out)
+    if expected and (policy.plan is not None or policy.plan_shares is not None):
+        p = (policy.plan.probs(plan_features(z, policy.ctx, policy.cstops, True)) if leave_season_out
+             else policy.plan_probs(z))
+        out['ExpPlan'] = p[PLANS].to_numpy() @ np.array(PLANS, dtype=float)
+    return out
+
+
+def neutral_features(d, lap_dummies):
+    """The neutral models' features added to add_features rows: from the STATUS columns where present, and from
+    ExpPlan and CircuitStops (plan_columns) where present."""
+    d = d.copy()
+    if 'LapStatus' in d:
+        d['IsVSC'] = (d['LapStatus'] == VSC_CODE).astype(float)
+        d['Cooldown'] = d['Cooldown'].astype(float)
+        d['NeutralLast'] = d['NeutralLast'].astype(float)
+        d['NeutralLapCap'] = np.minimum(d['NeutralLap'], lap_dummies + 1)
+        for k in range(1, lap_dummies + 1):
+            d[f'NeutralLap{k}'] = (d['NeutralLap'] == k).astype(float)
+            d[f'VSCLap{k}'] = d[f'NeutralLap{k}'] * d['IsVSC']
+    d['StopsMade'] = d['Stint'] - 1
+    if 'ExpPlan' in d:
+        d['ExpStopsLeft'] = (d['ExpPlan'] - d['StopsMade']).clip(lower=0)
+    if 'CircuitStops' in d:
+        stint = d['RaceLaps'] / (d['CircuitStops'] + 1)   # the circuit's typical stint, laps
+        d['AgeShareCircuit'] = d['TyreLife'] / stint
+        d['LeftShareCircuit'] = d['LapsLeft'] / stint
+    return d
+
+
+def neutral_data(policy, rows, starts, cfg, leave_season_out=False):
+    """Model rows from neutral_rows output: plan_columns of each car, add_features and neutral_features."""
+    pc = plan_columns(policy, starts, leave_season_out).set_axis(pd.MultiIndex.from_frame(starts[DRIVER_RACE]))
+    r = rows.drop(columns=['ExpPlan', 'CircuitStops'], errors='ignore').join(pc, on=DRIVER_RACE)
+    return neutral_features(add_features(r, policy.ctx), cfg['pit_decision']['neutral']['lap_dummies'])
+
+
+class RateBy:
+    """Baseline: the training rate per group of columns by, pulled toward the rate of the parent columns' group (or
+    the overall rate) with weight k rows. label: the 0 or 1 column it fits."""
+
+    def __init__(self, name, by, parent=(), k=0, label='PitStop'):
+        self.name, self.by, self.parent, self.k, self.label = name, list(by), list(parent), k, label
+
+    @staticmethod
+    def _key(d, cols):
+        v = d[cols].astype(float)
+        return pd.MultiIndex.from_frame(v) if len(cols) > 1 else pd.Index(v[cols[0]])
+
+    def _parent(self, d):
+        if not self.parent:
+            return np.full(len(d), self.all)
+        return pd.Series(self.prate.reindex(self._key(d, self.parent)).to_numpy()).fillna(self.all).to_numpy()
+
+    def fit(self, d):
+        y = d[self.label].astype(float)
+        self.all = y.mean()
+        if not self.by:
+            return self
+        t = d[sorted(set(self.by + self.parent))].astype(float).assign(y=y.to_numpy())
+        self.prate = t.groupby(self.parent)['y'].mean() if self.parent else None
+        g = t.groupby(self.by)['y'].agg(['sum', 'size'])
+        prior = self._parent(g.index.to_frame(index=False))
+        self.rate = (g['sum'] + self.k * prior) / (g['size'] + self.k)
+        return self
+
+    def prob(self, d):
+        if not self.by:
+            return np.full(len(d), self.all)
+        p = pd.Series(self.rate.reindex(self._key(d, self.by)).to_numpy())
+        return p.fillna(pd.Series(self._parent(d))).to_numpy()
+
+
+class GreenHazard:
+    """Baseline: the green timing hazard applied unchanged on neutral laps (PlanPolicy.pit_prob before the rules: no
+    stop once the realised plan is done)."""
+    name = 'green timing hazard, unchanged'
+
+    def __init__(self, hazard):
+        self.hazard = hazard
+
+    def fit(self, d):
+        return self
+
+    def prob(self, d):
+        return np.where(d['StopsLeft'] >= 1, self.hazard.prob(d), 0.0)
+
+
+class OnLabel:
+    """A pit hazard model fitted on another 0 or 1 column (the again models fit Again)."""
+
+    def __init__(self, model, label):
+        self.model, self.label, self.name = model, label, model.name
+
+    def fit(self, d):
+        self.model.fit(d.assign(PitStop=d[self.label].astype(bool)))
+        return self
+
+    def prob(self, d):
+        return self.model.prob(d)
+
+
+REALISED_PLAN = 'reference: neutral logit with the realised plan'
+
+
+def neutral_feature_list(cfg, groups=None):
+    """The hazard's features: the neutral_groups named in groups (default pit_decision.neutral.groups)."""
+    n = cfg['pit_decision']['neutral']
+    g = neutral_groups(n['lap_dummies'])
+    return [f for k in (n['groups'] if groups is None else groups) for f in g[k]]
+
+
+def neutral_candidates(cfg, timing=None, reference=False, groups=None):
+    """{name: factory}: the baselines (a constant rate per neutral type; a rate per type and lap of the run; with
+    timing, the green timing hazard unchanged), then the neutral logit and LightGBM grids on neutral_feature_list.
+    reference=True adds the logit with the realised plan's stops left (StopsLeft): in training a car never stops
+    once its realised plan is done, which is known only after the race, so it is shown but never chosen; it is
+    coherent only with plan_flags 'draw'."""
+    c, n = cfg['pit_decision'], cfg['pit_decision']['neutral']
+    feats = neutral_feature_list(cfg, groups)
+    kind = ['LapStatus', 'Cooldown']
+    lap_rate = 'rate per type and lap of the run'
+    f = {'constant rate per neutral type': lambda: RateBy('constant rate per neutral type', kind),
+         lap_rate: lambda: RateBy(lap_rate, kind + ['NeutralLapCap', 'NeutralLast'], kind, n['lap_rate_shrink'])}
+    if timing is not None:
+        f[GreenHazard.name] = lambda: GreenHazard(timing)
+    for C in n['C']:
+        f[f'neutral logit, C {C}'] = lambda C=C: LogitHazard(C, c['spline_knots'], feats, NEUTRAL_SPLINE)
+    g = n['lgbm']
+    for leaves in g['num_leaves']:
+        for trees in g['n_estimators']:
+            f[f'neutral lgbm, leaves {leaves}, trees {trees}'] = lambda leaves=leaves, trees=trees: LGBMHazard(
+                leaves, trees, g['min_child_samples'], g['learning_rate'], feats=feats)
+    if reference:
+        f[REALISED_PLAN] = lambda: LogitHazard(n['C'][0], c['spline_knots'], feats + ['StopsLeft'], NEUTRAL_SPLINE)
+    return f
+
+
+NEUTRAL_BASELINES = ['constant rate per neutral type', 'rate per type and lap of the run', GreenHazard.name]
+
+
+def again_candidates(cfg, feats=None):
+    """{name: factory} for the chance of another green flag stop after a neutral stop: a constant rate, a rate per
+    band of laps left, and the logit grid on feats (default pit_decision.neutral.again.features; spline on laps
+    left)."""
+    a = cfg['pit_decision']['neutral']['again']
+    feats = a['features'] if feats is None else feats
+    f = {'again: constant rate': lambda: RateBy('again: constant rate', [], label='Again'),
+         'again: rate by laps left': lambda: RateBy('again: rate by laps left', ['LeftBand'], k=a['band_shrink'], label='Again')}
+    for C in a['C']:
+        f[f'again logit, C {C}'] = lambda C=C: OnLabel(LogitHazard(C, a['spline_knots'], feats, ['LapsLeft']), 'Again')
+    return f
+
+
+def again_data(d, cfg):
+    """Again rows with LeftBand (laps left in bands of neutral.again.band_laps) for the rate baseline."""
+    return d.assign(LeftBand=(d['LapsLeft'] // cfg['pit_decision']['neutral']['again']['band_laps']).astype(float))
+
+
+def circuit_flag_rates(starts, k):
+    """(per circuit, overall) share of dry races with each NEUTRAL flag (race_starts rows), per circuit pulled
+    toward the overall share with weight k races."""
+    r = starts.groupby(RACE).agg(Circuit=('Circuit', 'first'), **{f: (f, 'first') for f in NEUTRAL})
+    overall = r[NEUTRAL].mean()
+    g = r.groupby('Circuit')[NEUTRAL]
+    return g.sum().add(k * overall).div(g.size() + k, axis=0), overall
+
+
+class NeutralPits:
+    """A rival's stops on neutral laps (simulator v2), used by replay when given status.
+    hazard: the pit chance at the end of a lap the green timing model leaves out (neutral_rows), then the policy's
+      rules (no stop on lap 1 or the last lap; forced stops near the end).
+    again: the chance of another green flag stop after a stop made on a neutral lap (None: no replan). replan
+      'redraw' sets the stops left after such a stop to at least one if another stop follows, else none; 'add'
+      only adds a stop when the plan has none left; 'none' keeps the plan (the neutral stop just uses up a planned
+      stop, or is an extra one when none is left).
+    plan_flags: the NEUTRAL flags the plan model gets: 'zero' (a green race), 'draw' (each draw's own status: a
+      safety car or VSC lap anywhere; red flags are folded into the safety car), 'circuit' (flag_rates, the circuit's
+      share of training races with each flag) or 'starts' (whatever the starts rows carry, the v1 behaviour)."""
+
+    def __init__(self, hazard, again, cfg, flag_rates=None, plan_flags=None, replan=None):
+        """plan_flags, replan: override pit_decision.neutral (studies)."""
+        c = cfg['pit_decision']
+        n = c['neutral']
+        self.hazard, self.again, self.flag_rates = hazard, again, flag_rates
+        self.cooldown, self.lap_dummies = c['neutral_cooldown_laps'], n['lap_dummies']
+        self.plan_flags = plan_flags or n['plan_flags']
+        self.replan = (replan or n['replan']) if again is not None else 'none'
+
+    def features(self, d):
+        return neutral_features(d, self.lap_dummies)
+
+    @property
+    def needs_plan(self):
+        """Whether a model uses the expected plan (ExpStopsLeft), so replay computes ExpPlan."""
+        feats = lambda m: getattr(getattr(m, 'model', m), 'feats', [])
+        return any('ExpStopsLeft' in feats(m) for m in [self.hazard, self.again] if m is not None)
+
+    def pit_prob(self, policy, d):
+        return policy.rules(d, self.hazard.prob(d))
+
+    def set_flags(self, s, code):
+        """Set the NEUTRAL columns of replay rows s (status codes code, one row each) for the plan model."""
+        if self.plan_flags == 'zero':
+            for f in NEUTRAL:
+                s[f] = 0.0
+        elif self.plan_flags == 'draw':
+            s['SafetyCar'] = (code == SC_CODE).any(axis=1).astype(float)
+            s['VSC'] = (code == VSC_CODE).any(axis=1).astype(float)
+            s['RedFlag'] = 0.0
+        elif self.plan_flags == 'circuit':
+            t, overall = self.flag_rates
+            for f in NEUTRAL:
+                s[f] = t[f].reindex(s['Circuit']).fillna(overall[f]).to_numpy()
+        elif self.plan_flags == 'starts':
+            for f in NEUTRAL:
+                if f not in s:
+                    s[f] = 0.0
+        else:
+            raise ValueError(f'unknown plan_flags {self.plan_flags}')
+
+    def replan_after(self, policy, s, idx, rng):
+        """After stops on a neutral lap (replay rows idx of s, already on their new tyre): draw whether another green
+        flag stop follows and set Plan (see replan)."""
+        if self.replan == 'none':
+            return
+        st = s.loc[idx]
+        d = self.features(policy.features(st.assign(TyreLife=1.0)))
+        again = rng.random(len(st)) < self.again.prob(d)
+        made = st['Stint'].to_numpy(float) - 1
+        left = np.maximum(st['Plan'].to_numpy(float) - made, 0)
+        s.loc[idx, 'Plan'] = made + np.where(again, np.maximum(left, 1), left if self.replan == 'add' else 0)
+
+
+def fit_neutral(policy, laps, pre, starts, years, cfg, hazard=None, again=None):
+    """NeutralPits for a PlanPolicy fitted on years: the hazard and again models (factories; default the names in
+    pit_decision.neutral.chosen) fitted on neutral_rows of the dry races of years, with the policy's context and
+    plan for the features. starts: race_starts rows (green_only=False) covering years."""
+    n = cfg['pit_decision']['neutral']
+    st = starts[starts['Year'].isin(years)]
+    rows, stops = neutral_rows(laps, pre, st, cfg)
+    hz = (hazard or neutral_candidates(cfg)[n['chosen']['hazard']])().fit(neutral_data(policy, rows, st, cfg, True))
+    ag = None
+    if n['replan'] != 'none':
+        ag = (again or again_candidates(cfg)[n['chosen']['again']])().fit(again_data(neutral_data(policy, stops, st, cfg, True), cfg))
+    return NeutralPits(hz, ag, cfg, circuit_flag_rates(st, n['flag_shrink']))
+
+
+# The replay check with neutral laps
+
+def real_counts(laps, starts, cfg):
+    """starts (race_starts rows) with their real race's Stops and FirstStop recounted as tyre changes only
+    (tyre_changes), and NeutralStops (tyre changes at the end of a neutral lap, lap_codes), for the
+    replay check against the real status. RaceType: green, VSC (VSC laps only) or SC (a safety car or red flag)."""
+    races = laps.merge(starts[RACE].drop_duplicates(), on=RACE)
+    l = races.merge(starts[DRIVER_RACE], on=DRIVER_RACE)
+    l = l.assign(Stop=tyre_changes(l, cfg).astype(bool)).merge(lap_codes(races, cfg), on=RACE + ['LapNumber'], how='left')
+    s = l[l['Stop']]
+    by = [s['Year'], s['Round'], s['Driver']]
+    g = pd.DataFrame({'Stops': s.groupby(by).size(), 'FirstStop': s.groupby(by)['LapNumber'].min(),
+                      'NeutralStops': (s['Neutral'] > 0).groupby(by).sum()})
+    kind = l.groupby(RACE)['Neutral'].agg(lambda x: 'SC' if (x == SC_CODE).any() else 'VSC' if (x == VSC_CODE).any() else 'green')
+    out = starts.drop(columns=['Stops', 'FirstStop'], errors='ignore').join(g, on=DRIVER_RACE).join(kind.rename('RaceType'), on=RACE)
+    out[['Stops', 'NeutralStops']] = out[['Stops', 'NeutralStops']].fillna(0.0)
+    return out
+
+
+def neutral_replay_metrics(sim, real):
+    """replay_metrics against real_counts rows, plus neutral stops: mean per driver real and simulated, their share
+    of all stops, and the MAE over races of the field's neutral stops (simulated: mean over draws)."""
+    out = replay_metrics(sim, real)
+    a = real.set_index(DRIVER_RACE)[['Stops', 'NeutralStops']].join(sim.groupby(DRIVER_RACE)[['SimStops', 'SimNeutral']].mean())
+    race = a.groupby(level=['Year', 'Round']).sum()
+    out.update({'Neutral stops, real': a['NeutralStops'].mean(), 'Neutral stops, sim': a['SimNeutral'].mean(),
+                'Neutral share, real': a['NeutralStops'].sum() / max(a['Stops'].sum(), 1),
+                'Neutral share, sim': a['SimNeutral'].sum() / max(a['SimStops'].sum(), 1e-9),
+                'Race neutral stops MAE': (race['SimNeutral'] - race['NeutralStops']).abs().mean()})
+    return out
+
+
+def neutral_folds(laps, pre, results, stops, starts, folds, cfg):
+    """Per fold (training seasons, scored season): (scored season, PlanPolicy fitted on the training seasons with no
+    NeutralPits, training rows, training again rows, scored rows, scored again rows), rows from neutral_rows through
+    neutral_data, again rows also through again_data. starts: race_starts rows (green_only=False) of every season."""
+    out = []
+    for train, year in folds:
+        pol = fit_plan_policy(laps, pre, results, stops, list(train), cfg, neutral=False)
+        tr, te = starts[starts['Year'].isin(train)], starts[starts['Year'] == year]
+        (r1, s1), (r2, s2) = neutral_rows(laps, pre, tr, cfg), neutral_rows(laps, pre, te, cfg)
+        out.append((year, pol, neutral_data(pol, r1, tr, cfg, True), again_data(neutral_data(pol, s1, tr, cfg, True), cfg),
+                    neutral_data(pol, r2, te, cfg), again_data(neutral_data(pol, s2, te, cfg), cfg)))
+    return out
+
+
+def neutral_preds(folds, factories, part='hazard'):
+    """{name: scored rows with p} over neutral_folds, each model refit per fold. factories: {name: factory}, or a
+    function of the fold's policy returning one (the green hazard baseline needs the fold's timing hazard). part
+    'again' fits and scores the again rows, with PitStop holding Again so table and lap_metrics apply."""
+    keep = DRIVER_RACE + ['LapNumber', 'LapStatus', 'NeutralLapCap', 'Cooldown', 'LapsLeft', 'PitStop']
+    preds = {}
+    for _, pol, tr, trs, te, tes in folds:
+        fit_rows, rows = (tr, te) if part == 'hazard' else (trs, tes)
+        f = factories(pol) if callable(factories) else factories
+        for name, make in f.items():
+            p = make().fit(fit_rows).prob(rows)
+            out = rows[keep].assign(p=p)
+            if part == 'again':
+                out['PitStop'] = rows['Again'].to_numpy()
+            preds.setdefault(name, []).append(out)
+    return {n: pd.concat(v, ignore_index=True) for n, v in preds.items()}
+
+
+def neutral_replay_by_type(sim, real):
+    """neutral_replay_metrics over every race ('all') and per real_counts RaceType."""
+    out = {'all': neutral_replay_metrics(sim, real)}
+    key = pd.MultiIndex.from_frame(sim[RACE])
+    for kind, r in real.groupby('RaceType'):
+        out[kind] = neutral_replay_metrics(sim[key.isin(pd.MultiIndex.from_frame(r[RACE].drop_duplicates()))], r)
     return out
