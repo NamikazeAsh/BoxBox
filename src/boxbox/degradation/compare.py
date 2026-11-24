@@ -7,7 +7,8 @@ from boxbox.degradation.bayes import BayesDegradation
 from boxbox.degradation.ensemble import KINDS
 from boxbox.degradation.gam import QuadraticDegradation, SplineDegradation
 from boxbox.degradation.intervals import Conformal, interval_scores
-from boxbox.degradation.linear import LinearDegradation, lap_terms_kw
+from boxbox.degradation.linear import LapTermsPace, LinearDegradation, lap_terms_kw
+from boxbox.degradation.monotone import MonotoneWear
 from boxbox.degradation.task import ConstantPace, forecast, model_laps
 from boxbox.degradation.trees import LGBMDegradation
 
@@ -26,6 +27,13 @@ def ladder(cfg):
          'linear v1': lambda: LinearDegradation(10),
          'linear': lambda: LinearDegradation(10, **lin_kw),
          'quadratic': lambda: QuadraticDegradation(10, max_age=g['max_age'], **lin_kw)}
+    # Fairer baselines: no wear, but the same dirty air and race start offsets (LapTermsPace)
+    f['constant pace, lap terms'] = lambda: LapTermsPace(10, own=True, **lin_kw)
+    f['constant pace, lap terms from linear'] = lambda: LapTermsPace(10, own=False, **lin_kw)
+    # The simulator's wear curves (simulator.wear_model with monotone_wear, modelling D13)
+    age = cfg.get('simulator', {}).get('max_age', 60)
+    for n in ['linear', 'quadratic']:
+        f[f'{n}, monotone'] = lambda n=n: MonotoneWear(f[n](), age)
     for lam in g['lam_grid']:
         f[f'gam, lam {lam}'] = lambda lam=lam: SplineDegradation(10, lam=lam, knot_step=g['knot_step'], max_age=g['max_age'], **lin_kw)
     for leaves in t['num_leaves']:

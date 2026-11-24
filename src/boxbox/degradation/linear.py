@@ -166,6 +166,33 @@ class LinearDegradation:
         return (self.pooled + c) * (self.f(laps_on_tyre) - self.f(1))
 
 
+class LapTermsPace(LinearDegradation):
+    """Constant pace plus the lap level offsets (dirty air, race start) and no tyre wear: the fair baseline for
+    the wear terms alone. own=True fits the offsets with every slope held at zero; own=False fits the full linear
+    model and then drops its slopes, so the offsets are exactly the linear model's and the only difference from it
+    is the wear (degradation_writeup step 18)."""
+
+    def __init__(self, shrink_stints=10, own=True, **kw):
+        super().__init__(shrink_stints, **kw)
+        self.own = own
+        self.name = 'constant pace, lap terms' + ('' if own else ' from linear')
+
+    def _zero(self):
+        self.cells['Slope'] = 0.0
+        self.pooled = self.pooled * 0.0
+        self.length_coef = self.length_coef * 0.0
+
+    def _fit_slopes(self, laps, y, w):
+        super()._fit_slopes(laps, y, w)
+        if self.own:
+            self._zero()
+
+    def fit(self, laps):
+        super().fit(laps)
+        self._zero()
+        return self
+
+
 def candidates(cfg):
     c = cfg['degradation']
     models = [ConstantPace()]
